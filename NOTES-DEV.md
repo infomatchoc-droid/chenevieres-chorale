@@ -38,6 +38,9 @@ Projet démarré le 24/10/2026 ; même chaîne que Chènevières EQ (JUCE 8.0.9,
    - tessiture automatique : **une octave par pupitre**, choisie d'après la hauteur moyenne (~2,5 s) — le plus petit
      déplacement qui tombe à 3 demi-tons à l'intérieur de `kRegisters` — et revue seulement en début de note
      (sinon la ligne saute d'octave en pleine mélodie) ; filet de sécurité à ±5 demi-tons hors tessiture.
+   - chaque marque porte aussi l'**écart** du chanteur à sa note de référence (`dev`) : le choriste chante
+     référence + intervalle + 30 % de cet écart (`kFollow`). Le suivre à 100 % rendait le chœur « robotique »
+     (toutes les voix bougent en parallèle parfait avec le chanteur, comme un harmoniseur).
    - non voisé à moins de 50 ms d'une note : le grain est transposé de l'intervalle de cette note (attaques).
 5. **Choristes réels** (`spawnGrain`) : PSOLA, un grain de Hann par période ; vers le grave, grain **asymétrique**
    (0,3 période avant la marque à l'octave au-dessous, 1 période après) : sinon la fin de la période précédente garde
@@ -96,6 +99,7 @@ build/ChoraleSnapshot docs/apercu.png [preset=N] [size=N] [scale=1.5]
 
 | Version | Contenu |
 |---|---|
+| 1.0.2 | Moins « robotique » (retour de Mathieu) : les choristes ne recopient plus la justesse fine du chanteur (ils chantent la note juste et ne suivent que 30 % de ses inflexions : vibrato, glissés), timbre plus varié d'un choriste à l'autre (formants ±6,5 %, couleur des aigus, niveau qui respire), attaques redistribuées à chaque phrase, masse sans effet de flanger (retards 16–71 ms, double modulation lente, passe-tout de décorrélation). |
 | 1.0.1 | Après écoute des voix de Mathieu (24/10/2026) : basse vraiment à l'octave (grain asymétrique vers le grave, sous-octave passée de -18 dB à -3 dB sous la fondamentale), plus d'erreur d'octave du détecteur sur les voyelles à 2e harmonique fort (continuité ≤ 40 ms), tessiture automatique par phrase (une octave par pupitre, revue seulement en début de note), attaques transposées dès la première consonne voisée. |
 | 1.0.0 | Première version : 9 tailles (3–1000), 4 pupitres SATB, harmonie diatonique / intervalles / MIDI, formants SATB, tessiture automatique, scène vue de dessus, réalisme humain, 4 lieux, 12 préréglages. Interface en français. |
 

@@ -45,7 +45,8 @@ Params::Params()
 namespace
 {
 constexpr float kPi = 3.14159265358979f;
-constexpr double kMinF0 = 75.0;     // plus grave détecté (latence = 4 périodes de cette note)
+constexpr double kMinF0 = 75.0;
+constexpr float kFollow = 0.3f;     // part des inflexions du chanteur que suivent les choristes     // plus grave détecté (latence = 4 périodes de cette note)
 constexpr double kMaxF0 = 1100.0;
 
 inline int floorDiv (int a, int b) { return (a >= 0) ? a / b : -((-a + b - 1) / b); }
@@ -292,7 +293,8 @@ struct Mark
     float period;
     float midi;
     bool voiced;
-    float offset[kSections];   // intervalle de chaque pupitre (demi-tons)
+    float offset[kSections];   // intervalle de chaque pupitre (demi-tons), par rapport à la note de référence
+    float dev[kSections];      // écart du chanteur à cette note de référence (vibrato, glissés, justesse)
 };
 
 struct Voice
@@ -310,6 +312,9 @@ struct Voice
     float offsetSm = 0, lastTarget = 1e9f, noteAge = 0;
     bool offsetInit = false;
     float drift = 0, driftTarget = 0, driftTimer = 0, vibPhase = 0;
+    float tone = 1, ampRate = 0.3f, ampPhase = 0;   // couleur (aigus) et respiration du niveau
+    float delayBase = 0, attackSpread = 0;          // retard sans l'attaque ; dispersion (redistribuée à chaque phrase)
+    bool inGap = true;
 
     // espace
     float delay = 0, delayTarget = 0;
@@ -323,6 +328,7 @@ struct Voice
 struct MassTap
 {
     float delayBase = 0, depth = 0, rate = 0, phase = 0, gL = 0, gR = 0, airCoef = 0, state = 0;
+    float rate2 = 0.2f, phase2 = 0, ap = 0, apX = 0, apY = 0;   // 2e modulation, passe-tout de décorrélation
 };
 
 struct Section
@@ -332,6 +338,7 @@ struct Section
     int singers = 0;            // choristes représentés
     float realGain = 0, massGain = 0, massGainSm = 0;
     int prevDegree = -1000;     // hystérésis du mode diatonique
+    float prevRef = -1.0f;      // hystérésis des modes intervalles et MIDI
     int foldShift = 0;          // octave du pupitre (tessiture automatique)
     bool foldInit = false;
     int lastInterval = -1;
@@ -635,6 +642,9 @@ struct Engine::Impl
                 v.attack = r.uni();
                 v.formant = r.gauss();
                 v.amp = r.gauss();
+                v.tone = 0.6f + 0.8f * r.uni();
+                v.ampRate = 0.12f + 0.45f * r.uni();
+                v.ampPhase = 2 * kPi * r.uni();
                 const float rad = std::sqrt (((float) i + 0.5f) / (float) kMaxVoicesPerSection);
                 const float ang = (float) i * 2.39996f + (float) s;
                 v.u = rad * std::cos (ang) + 0.08f * r.bi();
@@ -647,9 +657,12 @@ struct Engine::Impl
             Rng r ((uint32_t) (0x7a11 + s * 4099));
             for (auto& t : sec.taps)
             {
-                t.delayBase = 0.006f + 0.032f * r.uni();
-                t.depth = 0.00015f + 0.00035f * r.uni();
-                t.rate = 0.05f + 0.25f * r.uni();
+                t.delayBase = 0.016f + 0.055f * r.uni();
+                t.depth = 0.0004f + 0.0008f * r.uni();
+                t.rate = 0.05f + 0.10f * r.uni();
+                t.rate2 = 0.13f + 0.19f * r.uni();
+                t.phase2 = 2 * kPi * r.uni();
+                t.ap = 0.75f * r.bi();
                 t.phase = 2 * kPi * r.uni();
             }
             sec.brL.set (sr, 3800, 0.8, 2); sec.brR.set (sr, 4300, 0.8, 2);
@@ -681,9 +694,9 @@ struct Engine::Impl
         {
             for (auto& v : sec.voices) { v.active = false; v.fadingOut = false; std::fill (v.acc.begin(), v.acc.end(), 0.0f); v.gL = v.gR = v.mono = 0; v.airState = 0; }
             std::fill (sec.massRing.begin(), sec.massRing.end(), 0.0f);
-            sec.massWrite = 0; sec.prevDegree = -1000; sec.levelSm = 0; sec.massGainSm = 0; sec.foldInit = false;
+            sec.massWrite = 0; sec.prevRef = -1.0f; sec.prevDegree = -1000; sec.levelSm = 0; sec.massGainSm = 0; sec.foldInit = false;
             sec.brL.reset(); sec.brR.reset(); sec.brHpL.reset(); sec.brHpR.reset();
-            for (auto& t : sec.taps) t.state = 0;
+            for (auto& t : sec.taps) { t.state = 0; t.apX = t.apY = 0; }
         }
         hall.clear();
         envIn = 0;
@@ -762,10 +775,12 @@ struct Engine::Impl
                     v.gLt = gl * sec.realGain * ampVar * lvl;
                     v.gRt = gr * sec.realGain * ampVar * lvl;
                     v.monoT = 1.0f / std::sqrt ((float) real);
-                    v.airCoef = air;
+                    v.airCoef = std::pow (air, 0.65f + 0.35f * v.tone);
                     const float prop = std::max (0.0f, dist - applied.distanceM) / 343.0f * 1000.0f;
                     const float spreadMs = applied.attackMs * (0.35f + 0.65f * hum);
-                    v.delayTarget = (float) ((sp.delayMs + v.attack * spreadMs + prop) * sr / 1000.0);
+                    v.delayBase = (float) ((sp.delayMs + prop) * sr / 1000.0);
+                    v.attackSpread = (float) (spreadMs * sr / 1000.0);
+                    v.delayTarget = v.delayBase + v.attack * v.attackSpread;
                     if (! v.active || v.fadingOut) activate (v, s);
                     ++total;
                 }
@@ -812,13 +827,24 @@ struct Engine::Impl
 
     //--------------------------------------------------------------------------
     // Intervalle (demi-tons) d'un pupitre pour une note chantée
-    float sectionOffset (int s, float midi)
+    // Note « juste » la plus proche, avec hystérésis (modes intervalles et MIDI)
+    static float nearestNote (float midi, float& prevRef)
+    {
+        if (prevRef > 0 && std::abs (midi - prevRef) < 0.75f) return prevRef;
+        prevRef = std::round (midi);
+        return prevRef;
+    }
+
+    float sectionOffset (int s, float midi, float& dev)
     {
         const SectionParams& sp = applied.sec[(size_t) s];
         const Register& reg = kRegisters[s];
+        Section& sct = sections[(size_t) s];
 
         if (applied.mode == HarmonyMode::Midi)
         {
+            const float ref = nearestNote (midi, sct.prevRef);
+            dev = std::clamp (midi - ref, -1.5f, 1.5f);
             if (chordSize == 0) return 0.0f;   // pas d'accord tenu : unisson
             // pupitres allumés, du plus aigu au plus grave ; S prend la note la plus haute, B la plus basse
             int order = 0, count = 0;
@@ -829,13 +855,24 @@ struct Engine::Impl
             float target = (float) note;
             while (target > reg.centre + 6) target -= 12;
             while (target < reg.centre - 6) target += 12;
-            return std::clamp (target - midi, -36.0f, 36.0f);
+            return std::clamp (target - ref, -36.0f, 36.0f);
         }
 
         const IntervalDef& iv = kIntervals[std::clamp (sp.interval, 0, kNumIntervals - 1)];
-        float off = applied.mode == HarmonyMode::Diatonic
-                        ? diatonicOffset (midi, applied.keyRoot, applied.scale, iv.steps, &sections[(size_t) s].prevDegree)
-                        : (float) iv.semis;
+        float off, ref;
+        if (applied.mode == HarmonyMode::Diatonic)
+        {
+            off = diatonicOffset (midi, applied.keyRoot, applied.scale, iv.steps, &sct.prevDegree);
+            const int* pcs = kScalePcs[std::clamp (applied.scale, 0, kNumScales - 1)];
+            const int o = floorDiv (sct.prevDegree, 7);
+            ref = (float) (applied.keyRoot + pcs[sct.prevDegree - o * 7] + 12 * o);
+        }
+        else
+        {
+            off = (float) iv.semis;
+            ref = nearestNote (midi, sct.prevRef);
+        }
+        dev = std::clamp (midi - ref, -1.5f, 1.5f);
         if (applied.fold)
         {
             // Une seule octave pour tout le pupitre, choisie d'après la hauteur moyenne de la phrase
@@ -928,7 +965,10 @@ struct Engine::Impl
                 noteStart = ! lastMarkVoiced || (prev != nullptr && std::abs (m.midi - prev->midi) > 0.8f);
             }
             for (int s = 0; s < kSections; ++s)
-                m.offset[s] = voiced ? sectionOffset (s, m.midi) : (prev != nullptr ? prev->offset[s] : 0.0f);
+            {
+                if (voiced) m.offset[s] = sectionOffset (s, m.midi, m.dev[s]);
+                else { m.offset[s] = prev != nullptr ? prev->offset[s] : 0.0f; m.dev[s] = prev != nullptr ? prev->dev[s] : 0.0f; }
+            }
             if (voiced) detectedMidi.store (m.midi, std::memory_order_relaxed);
             ++markCount;
             lastMarkPos = pos;
@@ -965,7 +1005,7 @@ struct Engine::Impl
 
         const float hum = applied.humanity;
         const float dt = (float) (v.lastTs / sr);
-        const float fF = std::clamp (formantBase * (1.0f + 0.035f * hum * v.formant), 0.6f, 1.7f);
+        const float fF = std::clamp (formantBase * (1.0f + 0.065f * hum * v.formant), 0.6f, 1.7f);
 
         double leftOut, rightOut, centre, Ts;
         float g;
@@ -974,6 +1014,7 @@ struct Engine::Impl
         {
             const float target = m->offset[s];
             if (! v.offsetInit) { v.offsetSm = target; v.offsetInit = true; }
+            v.inGap = false;
             if (std::abs (target - v.lastTarget) > 0.5f) v.noteAge = 0;
             v.lastTarget = target;
             const float glide = v.glideTau * (0.4f + 0.9f * hum);
@@ -990,7 +1031,9 @@ struct Engine::Impl
             const float env = std::clamp ((v.noteAge - 0.15f) / 0.5f, 0.0f, 1.0f);
             const float vib = applied.vibrato * 0.38f * v.vibDepth * env * std::sin (v.vibPhase);
 
-            const float semis = v.offsetSm + v.detune * applied.detuneCents * 0.01f + v.drift + vib;
+            // Le choriste ne recopie pas le vibrato ni les glissés de la voix principale : il chante la note juste,
+            // avec seulement une part de ses inflexions (kFollow), et son propre vibrato, sa propre dérive.
+            const float semis = v.offsetSm - (1.0f - kFollow) * m->dev[s] + v.detune * applied.detuneCents * 0.01f + v.drift + vib;
             const double r = std::clamp ((double) std::exp2 (semis / 12.0f), 0.25, 4.0);
             const double Ta = m->period;
             // Vers le grave, le grain devient asymétrique : il commence juste avant l'impulsion de la glotte
@@ -1003,6 +1046,9 @@ struct Engine::Impl
             centre = m->pos;
             Ts = Ta / r;
             g = (float) (std::sqrt (fF / r) * std::sqrt (2.0 * Ta / (leftIn + rightIn)));
+            v.ampPhase += 2 * kPi * v.ampRate * dt;
+            if (v.ampPhase > 2 * kPi) v.ampPhase -= 2 * kPi;
+            g *= 1.0f + 0.16f * hum * std::sin (v.ampPhase);
         }
         else
         {
@@ -1014,6 +1060,12 @@ struct Engine::Impl
             centre = sp;
             Ts = Tu;
             g = 0.8f;
+            if (! v.inGap)
+            {
+                // nouvelle phrase : chaque choriste attaque un peu différemment de la fois précédente
+                v.inGap = true;
+                v.delayTarget = v.delayBase + v.rng.uni() * v.attackSpread;
+            }
             const double near = 0.05 * sr;
             const Mark* nb = nullptr;
             for (int64_t c = v.cursor + 1; c < markCount && c <= v.cursor + 12; ++c)
@@ -1031,7 +1083,7 @@ struct Engine::Impl
                 }
             if (nb != nullptr)
             {
-                const float semis = (v.offsetInit ? v.offsetSm : nb->offset[s]) + v.detune * applied.detuneCents * 0.01f;
+                const float semis = (v.offsetInit ? v.offsetSm : nb->offset[s]) - (1.0f - kFollow) * nb->dev[s] + v.detune * applied.detuneCents * 0.01f;
                 resample = std::clamp (std::exp2 (semis / 12.0f), 0.25f, 4.0f);
             }
         }
@@ -1064,7 +1116,8 @@ struct Engine::Impl
     void processVoice (Voice& v, int s, int n, int64_t blockStart, float formantBase)
     {
         // le choriste chante dans le passé : latence + son retard (pupitre, attaque, distance)
-        const double rate = 0.0025;   // vitesse max de variation du retard (≈ 4 cents)
+        // vitesse max de variation du retard : ≈ 4 cents pendant une note, rapide dans les silences
+        const double rate = v.inGap ? 0.05 : 0.0025;
         const double tEndEst = (double) (blockStart + n - latency) - (v.delay - rate * n) + 2.0;
         int guard = 0;
         while (v.nextSynth - v.lastHalfOut <= tEndEst && guard++ < 4096) spawnGrain (v, s, formantBase);
@@ -1165,13 +1218,17 @@ struct Engine::Impl
                     {
                         t.phase += 2 * kPi * t.rate / sr_f;
                         if (t.phase > 2 * kPi) t.phase -= 2 * kPi;
-                        const float dSamp = (t.delayBase + t.depth * std::sin (t.phase)) * sr_f;
+                        t.phase2 += 2 * kPi * t.rate2 / sr_f;
+                        if (t.phase2 > 2 * kPi) t.phase2 -= 2 * kPi;
+                        const float dSamp = (t.delayBase + t.depth * (0.6f * std::sin (t.phase) + 0.4f * std::sin (t.phase2))) * sr_f;
                         const float rp = (float) sec.massWrite - dSamp;
                         const float fl = std::floor (rp);
                         const int64_t ip = (int64_t) fl;
                         const float fr = rp - fl;
                         const float a = sec.massRing[(size_t) (ip & sec.massMask)], b = sec.massRing[(size_t) ((ip + 1) & sec.massMask)];
-                        const float y = a + fr * (b - a);
+                        const float y0 = a + fr * (b - a);
+                        const float y = t.ap * y0 + t.apX - t.ap * t.apY;   // passe-tout du 1er ordre
+                        t.apX = y0; t.apY = y;
                         t.state = y + t.airCoef * (t.state - y);
                         ml += t.state * t.gL;
                         mr += t.state * t.gR;
