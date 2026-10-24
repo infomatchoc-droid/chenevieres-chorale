@@ -178,12 +178,12 @@ void StageView::paint (juce::Graphics& g)
     g.fillEllipse (me.x - 9.0f, me.y - 9.0f, 18.0f, 18.0f);
     g.setColour (juce::Colour (0xffc9c5be));
     g.setFont (ui (11.0f));
-    g.drawText (juce::String (juce::CharPointer_UTF8 ("Voix principale · auditeur à ")) + juce::String (value (ids::distance), 0) + " m",
+    g.drawText (juce::String (juce::CharPointer_UTF8 ("Voix principale · auditeur à ")) + juce::String (juce::roundToInt (value (ids::distance))) + " m",
                 juce::Rectangle<float> (300.0f, 16.0f).withCentre ({ me.x, me.y + 26.0f }), juce::Justification::centred);
 
     g.setColour (dim);
     g.setFont (mono (11.0f));
-    g.drawText (juce::String (juce::CharPointer_UTF8 ("largeur ≈ ")) + juce::String (stageWidthMetres(), 0) + " m",
+    g.drawText (juce::String (juce::CharPointer_UTF8 ("largeur ≈ ")) + juce::String (juce::roundToInt (stageWidthMetres())) + " m",
                 b.reduced (14.0f, 10.0f), juce::Justification::bottomRight);
 }
 

@@ -74,6 +74,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout ChoraleProcessor::createLayo
     layout.add (dbParam (choirLevel, u ("Chœur"), -24, 12, def.choirDb));
     layout.add (pct (width, u ("Largeur stéréo"), def.width * 100, 0, 150));
     layout.add (dbParam (gain, u ("Gain de sortie"), -24, 12, def.gainDb));
+    layout.add (dbParam (brightness, u ("Brillance"), -6, 9, def.brightnessDb));
 
     const auto secNames = names::sectionNames();
     for (int s = 0; s < choir::kSections; ++s)
@@ -104,7 +105,7 @@ ChoraleProcessor::ChoraleProcessor()
 {
     using namespace ids;
     const char* globals[] = { size, mode, key, scale, source, voices, quality, fold, detune, attack, vibrato, breath, humanity,
-                              hall, distance, reverb, predelay, lead, choirLevel, width, gain };
+                              hall, distance, reverb, predelay, lead, choirLevel, width, gain, brightness };
     for (size_t i = 0; i < std::size (globals); ++i) raw[i] = apvts.getRawParameterValue (globals[i]);
     for (int s = 0; s < choir::kSections; ++s)
     {
@@ -139,6 +140,7 @@ choir::Params ChoraleProcessor::readParams() const
     p.choirDb = v (18);
     p.width = v (19) * 0.01f;
     p.gainDb = v (20);
+    p.brightnessDb = v (21);
     for (int s = 0; s < choir::kSections; ++s)
     {
         const auto& r = secRaw[s];

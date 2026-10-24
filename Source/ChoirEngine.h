@@ -67,6 +67,7 @@ struct Params
     float choirDb = 0.0f;
     float width = 1.0f;                      // 0 … 1.5
     float gainDb = 0.0f;
+    float brightnessDb = 3.0f;               // brillance du chœur (étagère aiguë à 6,5 kHz, -6 … +9 dB)
 
     std::array<SectionParams, kSections> sec;
 

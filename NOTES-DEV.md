@@ -103,6 +103,7 @@ build/ChoraleSnapshot docs/apercu.png [preset=N] [size=N] [scale=1.5]
 
 | Version | Contenu |
 |---|---|
+| 1.1.0 | Stéréo : panoramique d'après la place latérale sur la scène (+ écart interaural ≤ 0,62 ms) au lieu de l'angle vu de loin — le chœur était presque mono (corrélation G/D +0,9). Nouveau réglage **Brillance** (étagère 6,5 kHz, -6…+9 dB, +3 par défaut), disposition par défaut plus large, préréglage **Afro / Gospel studio** calqué sur une vidéo de référence (Wakhama Voice Choir, « Afrobeat Choir ») envoyée par Mathieu : même signature stéréo (chœur seul : corrélation -0,16, référence -0,17). Les préréglages peuvent fixer la place des pupitres. |
 | 1.0.3 | Marques de période par corrélation avec la période précédente, au sous-échantillon près (+ ancrage lent sur le sommet) : jitter d'un choriste 2,1 % → 0,55 % (voix d'origine 0,43 %, mesuré avec Praat) — c'était la principale cause du son « numérique ». Consonnes plus discrètes chez les choristes (grains non voisés à 0,4), vibrato dont la vitesse et l'amplitude flottent. |
 | 1.0.2 | Moins « robotique » (retour de Mathieu) : les choristes ne recopient plus la justesse fine du chanteur (ils chantent la note juste et ne suivent que 30 % de ses inflexions : vibrato, glissés), timbre plus varié d'un choriste à l'autre (formants ±6,5 %, couleur des aigus, niveau qui respire), attaques redistribuées à chaque phrase, masse sans effet de flanger (retards 16–71 ms, double modulation lente, passe-tout de décorrélation). |
 | 1.0.1 | Après écoute des voix de Mathieu (24/10/2026) : basse vraiment à l'octave (grain asymétrique vers le grave, sous-octave passée de -18 dB à -3 dB sous la fondamentale), plus d'erreur d'octave du détecteur sur les voyelles à 2e harmonique fort (continuité ≤ 40 ms), tessiture automatique par phrase (une octave par pupitre, revue seulement en début de note), attaques transposées dès la première consonne voisée. |
@@ -115,6 +116,12 @@ Chaque pupitre seul, hauteur comparée trame par trame (pyin) sur les passages a
   (majeure ou mineure selon la note) ~99 % ;
 - voix A (très ornée) : 86–89 % ; le reste = ornements mesurés en passage.
 Fichiers de test : `tests/` ne les contient pas (voix de Mathieu, à garder privées).
+
+## Comparaison avec une référence (24/10/2026)
+
+Vidéo de Wakhama Voice Choir (8 voix, Room 30 %, largeur 70 %, mix 60 %) : `/tmp/claude-0/ref/measure.py` calcule la corrélation
+G/D, le rapport côtés/centre, l'énergie > 4 et > 8 kHz, le centroïde et l'« étalement » des harmoniques (platitude 150–1500 Hz).
+La référence : corrélation -0,17, côtés +1,5 dB au-dessus du centre, harmoniques très étalées, brillance ×7 par rapport à la voix seule.
 
 ## En attente / idées
 

@@ -27,6 +27,7 @@ inline const char* const lead     = "lead";
 inline const char* const choirLevel = "choir";
 inline const char* const width    = "width";
 inline const char* const gain     = "gain";
+inline const char* const brightness = "bright";
 
 // Paramètres de pupitre : « s0_on », « s2_int »…
 inline juce::String sec (int s, const char* what) { return "s" + juce::String (s) + "_" + what; }

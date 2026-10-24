@@ -35,10 +35,10 @@ static const int kScalePcs[kNumScales][7] = {
 Params::Params()
 {
     // Disposition par défaut (maquette validée) : ténors et basses au fond, sopranos et altos devant
-    sec[0] = { true, 0,  -2.0f, 0.60f, 0.0f, 18.0f, 0.27f, 0.68f };   // S : unisson
-    sec[1] = { true, 9,  -4.0f, 0.55f, 0.0f, 22.0f, 0.73f, 0.68f };   // A : tierce au-dessous
-    sec[2] = { true, 12, -5.0f, 0.70f, 0.0f, 31.0f, 0.33f, 0.30f };   // T : sixte au-dessous
-    sec[3] = { true, 14, -6.0f, 0.65f, 0.0f, 34.0f, 0.67f, 0.30f };   // B : octave au-dessous
+    sec[0] = { true, 0,  -2.0f, 0.60f, 0.0f, 18.0f, 0.20f, 0.68f };   // S : unisson
+    sec[1] = { true, 9,  -4.0f, 0.55f, 0.0f, 22.0f, 0.80f, 0.68f };   // A : tierce au-dessous
+    sec[2] = { true, 12, -5.0f, 0.70f, 0.0f, 31.0f, 0.30f, 0.30f };   // T : sixte au-dessous
+    sec[3] = { true, 14, -6.0f, 0.65f, 0.0f, 34.0f, 0.70f, 0.30f };   // B : octave au-dessous
 }
 
 //==============================================================================
@@ -65,6 +65,14 @@ struct Rng
 struct Biquad
 {
     float b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0, z1 = 0, z2 = 0;
+    void setHighShelf (double sr, double f, double db)
+    {
+        const double A = std::pow (10.0, db / 40.0), w = 2.0 * 3.141592653589793 * std::min (f, sr * 0.45) / sr;
+        const double cw = std::cos (w), al = std::sin (w) / 2.0 * std::sqrt (2.0), sa = 2.0 * std::sqrt (A) * al;
+        const double B0 = A * ((A + 1) + (A - 1) * cw + sa), B1 = -2 * A * ((A - 1) + (A + 1) * cw), B2 = A * ((A + 1) + (A - 1) * cw - sa);
+        const double A0 = (A + 1) - (A - 1) * cw + sa, A1 = 2 * ((A - 1) - (A + 1) * cw), A2 = (A + 1) - (A - 1) * cw - sa;
+        b0 = (float) (B0 / A0); b1 = (float) (B1 / A0); b2 = (float) (B2 / A0); a1 = (float) (A1 / A0); a2 = (float) (A2 / A0);
+    }
     void set (double sr, double f, double q, int type) // 0 passe-bas, 1 passe-haut, 2 passe-bande
     {
         f = std::min (f, sr * 0.45);
@@ -320,6 +328,7 @@ struct Voice
     // espace
     float delay = 0, delayTarget = 0;
     float gL = 0, gR = 0, gLt = 0, gRt = 0, mono = 0, monoT = 0;
+    float itd = 0, itdSm = 0, airStateR = 0;
     float airCoef = 0, airState = 0;
 
     std::vector<float> acc;
@@ -560,6 +569,7 @@ struct Engine::Impl
     double sr = 48000;
     int maxBlock = 512;
     int latency = 0;
+    int itdMax = 0;
     double Tmax = 640, Tu = 288;
 
     // entrée
@@ -594,6 +604,7 @@ struct Engine::Impl
     std::vector<float> busL, busR, mono;
     float envIn = 0, envCoefA = 0, envCoefR = 0;
     float leadSm = 0, choirSm = 0, outSm = 0, wetSm = 0, widthSm = 1;
+    Biquad shelfL, shelfR;   // brillance du chœur
     float gainSmCoef = 0;
 
     std::atomic<float> detectedMidi { -1.0f };
@@ -607,6 +618,7 @@ struct Engine::Impl
         maxBlock = std::max (1, block);
         Tmax = sr / kMinF0;
         Tu = std::max (16.0, 0.006 * sr);
+        itdMax = (int) std::ceil (0.0007 * sr) + 2;
 
         pitch.prepare (sr);
         const int hopFull = pitch.hop * pitch.D;
@@ -700,6 +712,7 @@ struct Engine::Impl
             for (auto& t : sec.taps) { t.state = 0; t.apX = t.apY = 0; }
         }
         hall.clear();
+        shelfL.reset(); shelfR.reset();
         envIn = 0;
         detectedMidi.store (-1.0f);
     }
@@ -745,13 +758,18 @@ struct Engine::Impl
             const float cx = (sp.x - 0.5f) * stageW, cy = sp.y * stageD;
             const float R = std::sqrt ((float) per * 0.55f / kPi) * (0.45f + 1.1f * sp.spread) + 0.15f;
 
-            auto place = [&] (float u, float v, float& gl, float& gr, float& dist, float& air)
+            auto place = [&] (float u, float v, float& gl, float& gr, float& dist, float& air, float& itd)
             {
                 const float px = cx + u * R, py = cy + v * R * 0.62f;
                 const float dx = px, dy = std::max (0.5f, listenerY - py);
                 dist = std::sqrt (dx * dx + dy * dy) + 0.3f;
                 const float az = std::atan2 (dx, dy);
-                const float pan = std::clamp (std::sin (az) * 1.7f, -1.0f, 1.0f);
+                // Panoramique d'après la place sur toute la largeur de la scène (comme un couple de micros devant
+                // le chœur), et non d'après l'angle vu de loin : sinon tout le chœur se tasse au centre (mesuré :
+                // corrélation G/D +0,9, presque mono ; une référence du commerce est à -0,2).
+                const float lateral = px / (0.5f * stageW);
+                const float pan = std::clamp (0.85f * lateral * 1.25f + 0.15f * std::sin (az) * 1.7f, -1.0f, 1.0f);
+                itd = pan * 0.00062f * (float) sr;   // l'oreille opposée entend un peu plus tard (≤ 0,62 ms)
                 const float th = (pan + 1.0f) * kPi * 0.25f;
                 const float g = std::clamp ((applied.distanceM + 1.5f) / dist, 0.15f, 1.6f);
                 gl = std::cos (th) * g; gr = std::sin (th) * g;
@@ -769,9 +787,10 @@ struct Engine::Impl
                 const bool want = i < real;
                 if (want)
                 {
-                    float gl, gr, dist, air;
+                    float gl, gr, dist, air, itd;
                     const float uu = real == 1 ? 0.0f : v.u, vv = real == 1 ? 0.0f : v.v;
-                    place (uu, vv, gl, gr, dist, air);
+                    place (uu, vv, gl, gr, dist, air, itd);
+                    v.itd = itd;
                     const float ampVar = dbToGain (v.amp * 1.6f * hum);
                     v.gLt = gl * sec.realGain * ampVar * lvl;
                     v.gRt = gr * sec.realGain * ampVar * lvl;
@@ -795,8 +814,8 @@ struct Engine::Impl
             Rng r ((uint32_t) (0x9a55 + s * 17));
             for (auto& t : sec.taps)
             {
-                float gl, gr, dist, air;
-                place (r.bi() * 0.9f, r.bi() * 0.9f, gl, gr, dist, air);
+                float gl, gr, dist, air, itd;
+                place (r.bi() * 0.9f, r.bi() * 0.9f, gl, gr, dist, air, itd);
                 t.gL = gl; t.gR = gr;
                 t.airCoef = std::min (0.995f, air * 1.03f);
             }
@@ -815,13 +834,13 @@ struct Engine::Impl
         v.delay = v.delayTarget;
         const double tv = (double) (writePos - latency) - v.delay;
         v.nextSynth = std::floor (tv);
-        v.cleared = (int64_t) std::floor (tv) - 2;
+        v.cleared = (int64_t) std::floor (tv) - 2 - itdMax;
         std::fill (v.acc.begin(), v.acc.end(), 0.0f);
         v.cursor = std::max<int64_t> (0, markCount - kMarkCap);
         v.offsetInit = false;
         v.lastTarget = 1e9f;
         v.noteAge = 0;
-        v.gL = v.gR = 0; v.mono = 0; v.airState = 0;
+        v.gL = v.gR = 0; v.mono = 0; v.airState = 0; v.airStateR = 0; v.itdSm = v.itd;
         v.lastHalfOut = Tu; v.lastTs = Tu;
         (void) s;
     }
@@ -1195,17 +1214,28 @@ struct Engine::Impl
             const float fr = (float) (tv - fl);
             const float a = v.acc[(size_t) (i0 & v.accMask)], b = v.acc[(size_t) ((i0 + 1) & v.accMask)];
             const float y = a + fr * (b - a);
+            // écart interaural : l'oreille du côté opposé lit le même choriste un peu plus tôt dans le passé
+            v.itdSm += (v.itd - v.itdSm) * 0.001f;
+            const double tl = tv - (double) std::max (0.0f, -v.itdSm), tr = tv - (double) std::max (0.0f, v.itdSm);
+            auto readAcc = [&v] (double t) {
+                const double f0 = std::floor (t); const int64_t k = (int64_t) f0; const float q = (float) (t - f0);
+                const float p0 = v.acc[(size_t) (k & v.accMask)], p1 = v.acc[(size_t) ((k + 1) & v.accMask)];
+                return p0 + q * (p1 - p0);
+            };
+            const float yl = v.itdSm < 0 ? readAcc (tl) : y;
+            const float yr = v.itdSm > 0 ? readAcc (tr) : y;
 
             v.gL += (v.gLt - v.gL) * gainSmCoef;
             v.gR += (v.gRt - v.gR) * gainSmCoef;
             v.mono += (v.monoT - v.mono) * gainSmCoef;
-            v.airState = y + v.airCoef * (v.airState - y);
+            v.airState = yl + v.airCoef * (v.airState - yl);
+            v.airStateR = yr + v.airCoef * (v.airStateR - yr);
             L[i] += v.airState * v.gL;
-            R[i] += v.airState * v.gR;
+            R[i] += v.airStateR * v.gR;
             M[i] += y * v.mono;
         }
         // on efface ce qui a été lu
-        const int64_t upTo = (int64_t) std::floor (tv) - 1;
+        const int64_t upTo = (int64_t) std::floor (tv) - 2 - itdMax;   // on garde de quoi lire l'écart interaural
         for (int64_t k = v.cleared + 1; k <= upTo; ++k) v.acc[(size_t) (k & v.accMask)] = 0.0f;
         if (upTo > v.cleared) v.cleared = upTo;
 
@@ -1216,8 +1246,16 @@ struct Engine::Impl
     void process (const float* const* in, int numIn, float* const* out, int numOut, int n)
     {
         // réglages
-        if (firstParams) { applied = p; firstParams = false; hall.setHall (applied.hall); hall.setPredelay (applied.predelayMs); updateGeometry(); }
-        else if (paramsChanged()) { applied = p; hall.setHall (applied.hall); hall.setPredelay (applied.predelayMs); updateGeometry(); }
+        if (firstParams || paramsChanged())
+        {
+            const bool first = firstParams;
+            applied = p; firstParams = false;
+            hall.setHall (applied.hall); hall.setPredelay (applied.predelayMs);
+            shelfL.setHighShelf (sr, 6500.0, applied.brightnessDb);
+            shelfR.setHighShelf (sr, 6500.0, applied.brightnessDb);
+            if (first) { shelfL.reset(); shelfR.reset(); }
+            updateGeometry();
+        }
         if (chordDirty) { rebuildChord(); chordDirty = false; }
 
         const int64_t blockStart = writePos;
@@ -1325,6 +1363,8 @@ struct Engine::Impl
             wetSm += (wetT - wetSm) * gainSmCoef;
             widthSm += (widthT - widthSm) * gainSmCoef;
 
+            L[i] = shelfL.process (L[i]);
+            R[i] = shelfR.process (R[i]);
             float wl, wr;
             hall.process (L[i], R[i], wl, wr);
             float cl = L[i] * (1.0f - 0.3f * wetSm) + wl * wetSm;
@@ -1351,7 +1391,7 @@ struct Engine::Impl
             || a.sourceFemale != b.sourceFemale || a.numSections != b.numSections || a.quality != b.quality || a.fold != b.fold
             || ne (a.detuneCents, b.detuneCents) || ne (a.attackMs, b.attackMs) || ne (a.vibrato, b.vibrato) || ne (a.breath, b.breath)
             || ne (a.humanity, b.humanity) || a.hall != b.hall || ne (a.distanceM, b.distanceM) || ne (a.reverb, b.reverb)
-            || ne (a.predelayMs, b.predelayMs) || ne (a.leadDb, b.leadDb) || ne (a.choirDb, b.choirDb) || ne (a.width, b.width) || ne (a.gainDb, b.gainDb))
+            || ne (a.predelayMs, b.predelayMs) || ne (a.leadDb, b.leadDb) || ne (a.choirDb, b.choirDb) || ne (a.width, b.width) || ne (a.gainDb, b.gainDb) || ne (a.brightnessDb, b.brightnessDb))
             return true;
         for (int s = 0; s < kSections; ++s)
         {

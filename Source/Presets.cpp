@@ -16,6 +16,11 @@ const std::vector<Preset>& all()
     using namespace ids;
     static const std::vector<Preset> list = {
         { "Chœur de cathédrale", {} },   // = réglages par défaut
+        { "Afro / Gospel studio", { { size, 2 }, { voices, 0 }, { hall, 0 }, { distance, 3 }, { reverb, 30 }, { attack, 25 }, { vibrato, 45 },
+                                    { width, 150 }, { brightness, 4 }, { lead, -6 }, { fold, 0 },
+                                    { sec (0, interval), 2 }, { sec (1, interval), 0 }, { sec (2, interval), 14 },
+                                    { sec (0, x), 0.05f }, { sec (0, y), 0.6f }, { sec (1, x), 0.95f }, { sec (1, y), 0.6f },
+                                    { sec (2, x), 0.25f }, { sec (2, y), 0.35f } } },
         { "Grand chœur de cathédrale", { { size, 6 }, { hall, 3 }, { distance, 14 }, { reverb, 45 }, { attack, 45 } } },
         { "Chœur symphonique", { { size, 5 }, { hall, 2 }, { distance, 10 }, { reverb, 35 } } },
         { "Chœur de chambre", { { size, 3 }, { hall, 2 }, { distance, 6 }, { reverb, 28 }, { attack, 30 }, { humanity, 75 } } },
@@ -51,12 +56,12 @@ juce::String name (int index)
 void apply (juce::AudioProcessorValueTreeState& apvts, int index)
 {
     if (index < 0 || index >= count()) return;
-    // tout revient au réglage par défaut (sauf la place des pupitres, la voix d'origine et la tonalité, propres au morceau)
+    // tout revient au réglage par défaut (sauf la voix d'origine, la tonalité et la qualité, propres au morceau et à l'ordinateur)
     for (auto* p : apvts.processor.getParameters())
         if (auto* rp = dynamic_cast<juce::RangedAudioParameter*> (p))
         {
             const auto id = rp->getParameterID();
-            if (id.endsWith ("_x") || id.endsWith ("_y") || id == ids::source || id == ids::key || id == ids::scale || id == ids::quality)
+            if (id == ids::source || id == ids::key || id == ids::scale || id == ids::quality)
                 continue;
             rp->setValueNotifyingHost (rp->getDefaultValue());
         }

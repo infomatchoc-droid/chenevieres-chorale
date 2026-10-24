@@ -223,6 +223,7 @@ int main (int argc, char** argv)
             else if (k == "vib") p.vibrato = v / 100; else if (k == "breath") p.breath = v / 100; else if (k == "hum") p.humanity = v / 100;
             else if (k == "det") p.detuneCents = v; else if (k == "lead") p.leadDb = v; else if (k == "choir") p.choirDb = v;
             else if (k == "width") p.width = v / 100; else if (k == "pre") p.predelayMs = v;
+            else if (k == "bright") p.brightnessDb = v;
             else if (k.size() > 2 && k[0] == 's' && k[1] >= '0' && k[1] <= '3')
             {
                 auto& s = p.sec[(size_t) (k[1] - '0')];

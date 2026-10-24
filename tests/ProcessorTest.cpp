@@ -69,9 +69,9 @@ int main()
             CHECK (p->getCurrentProgram() == i, "programme %d", i);
             CHECK (runAudio (*p, 2, 2, 60), "préréglage %s", presets::name (i).toRawUTF8());
         }
-        p->setCurrentProgram (6);   // Gospel : 3 voix
+        p->setCurrentProgram (7);   // Gospel : 3 voix
         CHECK (p->apvts.getRawParameterValue (ids::voices)->load() < 0.5f, "Gospel en 3 voix");
-        p->setCurrentProgram (1);
+        p->setCurrentProgram (2);
         CHECK (p->apvts.getRawParameterValue (ids::voices)->load() > 0.5f, "retour à 4 voix");
         CHECK ((int) p->apvts.getRawParameterValue (ids::size)->load() == 6, "grand chœur : 300 choristes");
         p->setCurrentProgram (0);
@@ -110,7 +110,7 @@ int main()
     {
         const int n = p->getParameters().size();
         std::printf ("   %d paramètres\n", n);
-        CHECK (n == 21 + 8 * choir::kSections, "nombre de paramètres : %d", n);
+        CHECK (n == 22 + 8 * choir::kSections, "nombre de paramètres : %d", n);
         juce::StringArray seen;
         for (auto* prm : p->getParameters())
             if (auto* rp = dynamic_cast<juce::RangedAudioParameter*> (prm))

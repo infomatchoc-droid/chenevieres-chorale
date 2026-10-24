@@ -316,6 +316,7 @@ ChoraleEditor::ChoraleEditor (ChoraleProcessor& p)
     leadKnobs.add (new Knob (apvts, ids::lead, u ("Voix seule"), u ("Niveau de la voix d'origine (tout à gauche : coupée)")));
     leadKnobs.add (new Knob (apvts, ids::choirLevel, u ("Chœur"), u ("Niveau du chœur")));
     outKnobs.add (new Knob (apvts, ids::width, u ("Largeur"), u ("Largeur stéréo du chœur")));
+    outKnobs.add (new Knob (apvts, ids::brightness, u ("Brillance"), u ("Air et présence dans les aigus du chœur")));
     outKnobs.add (new Knob (apvts, ids::gain, u ("Gain"), u ("Gain de sortie")));
     for (auto* arr : { &realism, &acoustics, &leadKnobs, &outKnobs })
         for (auto* k : *arr) content.addAndMakeVisible (k);
@@ -399,10 +400,10 @@ void ChoraleEditor::layoutContent()
     float x = 20;
     for (int i = 0; i < 4; ++i) { groupArea[i] = { x, 630, widths[i], 150 }; x += widths[i] + 12; }
 
-    auto placeKnobs = [] (juce::OwnedArray<Knob>& ks, juce::Rectangle<float> area, float y, float kw)
+    auto placeKnobs = [] (juce::OwnedArray<Knob>& ks, juce::Rectangle<float> area, float y, float kw, float reserveRight = 0)
     {
         const float total = kw * (float) ks.size();
-        const float gap = ks.size() > 1 ? juce::jmin (14.0f, (area.getWidth() - 24 - total) / (float) (ks.size() - 1)) : 0;
+        const float gap = ks.size() > 1 ? juce::jmin (14.0f, (area.getWidth() - 24 - reserveRight - total) / (float) (ks.size() - 1)) : 0;
         float kx = area.getX() + 12;
         for (auto* k : ks) { k->setBounds ((int) kx, (int) (area.getY() + y), (int) kw, 82); kx += kw + gap; }
     };
@@ -410,7 +411,7 @@ void ChoraleEditor::layoutContent()
     hallButtons.setBounds ((int) groupArea[1].getX() + 12, (int) groupArea[1].getY() + 34, (int) groupArea[1].getWidth() - 24, 26);
     placeKnobs (acoustics, groupArea[1], 66, 64);
     placeKnobs (leadKnobs, groupArea[2], 40, 64);
-    placeKnobs (outKnobs, groupArea[3], 40, 64);
+    placeKnobs (outKnobs, groupArea[3], 40, 54, 22);   // place du vumètre à droite
     qualityBox.setBounds ((int) groupArea[3].getRight() - 12 - 92, (int) groupArea[3].getY() + 8, 92, 24);
     meterArea = { groupArea[3].getRight() - 22, groupArea[3].getY() + 44, 8, 92 };
 }
