@@ -35,18 +35,17 @@ static const int kScalePcs[kNumScales][7] = {
 Params::Params()
 {
     // Disposition par défaut (maquette validée) : ténors et basses au fond, sopranos et altos devant
-    sec[0] = { true, 0,  -2.0f, 0.60f, 0.0f, 18.0f, 0.20f, 0.68f };   // S : unisson
-    sec[1] = { true, 9,  -4.0f, 0.55f, 0.0f, 22.0f, 0.80f, 0.68f };   // A : tierce au-dessous
-    sec[2] = { true, 12, -5.0f, 0.70f, 0.0f, 31.0f, 0.30f, 0.30f };   // T : sixte au-dessous
-    sec[3] = { true, 14, -6.0f, 0.65f, 0.0f, 34.0f, 0.70f, 0.30f };   // B : octave au-dessous
+    sec[0] = { true, 0,  -2.0f, 0.60f, 0.0f, 6.0f, 0.20f, 0.68f };   // S : unisson
+    sec[1] = { true, 9,  -4.0f, 0.55f, 0.0f, 8.0f, 0.80f, 0.68f };   // A : tierce au-dessous
+    sec[2] = { true, 12, -5.0f, 0.70f, 0.0f, 11.0f, 0.30f, 0.30f };   // T : sixte au-dessous
+    sec[3] = { true, 14, -6.0f, 0.65f, 0.0f, 13.0f, 0.70f, 0.30f };   // B : octave au-dessous
 }
 
 //==============================================================================
 namespace
 {
 constexpr float kPi = 3.14159265358979f;
-constexpr double kMinF0 = 75.0;
-constexpr float kFollow = 0.3f;     // part des inflexions du chanteur que suivent les choristes     // plus grave détecté (latence = 4 périodes de cette note)
+constexpr double kMinF0 = 75.0;     // plus grave détecté (latence = 4 périodes de cette note)
 constexpr double kMaxF0 = 1100.0;
 
 inline int floorDiv (int a, int b) { return (a >= 0) ? a / b : -((-a + b - 1) / b); }
@@ -250,8 +249,9 @@ struct PitchTracker
             period = ((float) best + std::clamp (off, -0.5f, 0.5f)) * (float) D;
         }
 
-        const bool loud = rms > 0.0035f;
-        const bool nowVoiced = loud && period > 0 && (voiced ? cm < 0.32f : cm < 0.2f);
+        // la note est prise dès qu'elle est nette, et gardée jusqu'au bout de sa queue (plus bas, moins net)
+        const bool loud = rms > (voiced ? 0.0016f : 0.0035f);
+        const bool nowVoiced = loud && period > 0 && (voiced ? cm < 0.45f : cm < 0.2f);
 
         if (nowVoiced)
         {
@@ -302,7 +302,7 @@ struct Mark
     float midi;
     bool voiced;
     float offset[kSections];   // intervalle de chaque pupitre (demi-tons), par rapport à la note de référence
-    float dev[kSections];      // écart du chanteur à cette note de référence (vibrato, glissés, justesse)
+    float dev[kSections];      // part de l'écart du chanteur (à sa note de référence) que les choristes ne suivent PAS
 };
 
 struct Voice
@@ -348,7 +348,8 @@ struct Section
     int singers = 0;            // choristes représentés
     float realGain = 0, massGain = 0, massGainSm = 0;
     int prevDegree = -1000;     // hystérésis du mode diatonique
-    float prevRef = -1.0f;      // hystérésis des modes intervalles et MIDI
+    float prevRef = -1.0f;      // hystérésis de la note de référence (demi-ton chanté)
+    float devSlow = 0.0f;       // justesse lente du chanteur (glissés, notes un peu basses / hautes)
     int foldShift = 0;          // octave du pupitre (tessiture automatique)
     bool foldInit = false;
     int lastInterval = -1;
@@ -882,10 +883,11 @@ struct Engine::Impl
         float off, ref;
         if (applied.mode == HarmonyMode::Diatonic)
         {
+            // L'intervalle vient de la gamme (tierce majeure ou mineure selon le degré), mais il s'applique au
+            // demi-ton réellement chanté : une note hors gamme (ré naturel en mi majeur…) reste juste à l'unisson
+            // et à l'octave, au lieu d'être tirée vers la note de gamme voisine (le pupitre chantait faux).
             off = diatonicOffset (midi, applied.keyRoot, applied.scale, iv.steps, &sct.prevDegree);
-            const int* pcs = kScalePcs[std::clamp (applied.scale, 0, kNumScales - 1)];
-            const int o = floorDiv (sct.prevDegree, 7);
-            ref = (float) (applied.keyRoot + pcs[sct.prevDegree - o * 7] + 12 * o);
+            ref = nearestNote (midi, sct.prevRef);
         }
         else
         {
@@ -1040,7 +1042,20 @@ struct Engine::Impl
             }
             for (int s = 0; s < kSections; ++s)
             {
-                if (voiced) m.offset[s] = sectionOffset (s, m.midi, m.dev[s]);
+                if (voiced)
+                {
+                    // Les choristes suivent la justesse LENTE du chanteur (glissés, attaques par en dessous, note un peu
+                    // basse : 90 %), pas ses variations rapides (vibrato, micro-variations : 20 %), qu'ils remplacent par
+                    // les leurs. Tout suivre = parallèle robotique ; ne rien suivre = chœur faux par rapport à la voix.
+                    Section& sc = sections[(size_t) s];
+                    const float refBefore = sc.prevRef;
+                    m.offset[s] = sectionOffset (s, m.midi, m.dev[s]);
+                    const float raw = m.dev[s];
+                    if (sc.prevRef != refBefore || ! lastMarkVoiced) sc.devSlow = raw;
+                    else sc.devSlow += (raw - sc.devSlow) * std::min (1.0f, period / (float) sr / 0.08f);
+                    const float followed = 0.9f * sc.devSlow + 0.2f * (raw - sc.devSlow);
+                    m.dev[s] = raw - followed;
+                }
                 else { m.offset[s] = prev != nullptr ? prev->offset[s] : 0.0f; m.dev[s] = prev != nullptr ? prev->dev[s] : 0.0f; }
             }
             if (voiced) detectedMidi.store (m.midi, std::memory_order_relaxed);
@@ -1109,8 +1124,8 @@ struct Engine::Impl
             const float vib = applied.vibrato * 0.38f * v.vibDepth * (1.0f + 0.25f * v.vibWander) * env * std::sin (v.vibPhase);
 
             // Le choriste ne recopie pas le vibrato ni les glissés de la voix principale : il chante la note juste,
-            // avec seulement une part de ses inflexions (kFollow), et son propre vibrato, sa propre dérive.
-            const float semis = v.offsetSm - (1.0f - kFollow) * m->dev[s] + v.detune * applied.detuneCents * 0.01f + v.drift + vib;
+            // avec sa justesse lente mais pas son vibrato (voir generateMarks), et son propre vibrato, sa propre dérive.
+            const float semis = v.offsetSm - m->dev[s] + v.detune * applied.detuneCents * 0.01f + v.drift + vib;
             const double r = std::clamp ((double) std::exp2 (semis / 12.0f), 0.25, 4.0);
             const double Ta = m->period;
             // Vers le grave, le grain devient asymétrique : il commence juste avant l'impulsion de la glotte
@@ -1143,24 +1158,24 @@ struct Engine::Impl
                 v.inGap = true;
                 v.delayTarget = v.delayBase + v.rng.uni() * v.attackSpread;
             }
-            const double near = 0.05 * sr;
+            const double near = 0.05 * sr, nearBack = 0.15 * sr;   // attaque : 50 ms ; fin de note : 150 ms
             const Mark* nb = nullptr;
-            for (int64_t c = v.cursor + 1; c < markCount && c <= v.cursor + 12; ++c)
+            for (int64_t c = v.cursor + 1; c < markCount && c <= v.cursor + 16; ++c)
             {
                 const Mark& mk = marks[(size_t) (c % kMarkCap)];
                 if (mk.pos - sp > near) break;
                 if (mk.voiced) { nb = &mk; break; }
             }
             if (nb == nullptr)
-                for (int64_t c = v.cursor; c >= oldest && c >= v.cursor - 12; --c)
+                for (int64_t c = v.cursor; c >= oldest && c >= v.cursor - 32; --c)
                 {
                     const Mark& mk = marks[(size_t) (c % kMarkCap)];
-                    if (sp - mk.pos > near) break;
+                    if (sp - mk.pos > nearBack) break;
                     if (mk.voiced) { nb = &mk; break; }
                 }
             if (nb != nullptr)
             {
-                const float semis = (v.offsetInit ? v.offsetSm : nb->offset[s]) - (1.0f - kFollow) * nb->dev[s] + v.detune * applied.detuneCents * 0.01f;
+                const float semis = (v.offsetInit ? v.offsetSm : nb->offset[s]) - nb->dev[s] + v.detune * applied.detuneCents * 0.01f;
                 resample = std::clamp (std::exp2 (semis / 12.0f), 0.25f, 4.0f);
                 g = 0.8f;
             }

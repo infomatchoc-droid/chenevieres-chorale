@@ -16,11 +16,12 @@ const std::vector<Preset>& all()
     using namespace ids;
     static const std::vector<Preset> list = {
         { "Chœur de cathédrale", {} },   // = réglages par défaut
-        { "Afro / Gospel studio", { { size, 2 }, { voices, 0 }, { hall, 0 }, { distance, 3 }, { reverb, 30 }, { attack, 25 }, { vibrato, 45 },
+        { "Afro / Gospel studio", { { size, 2 }, { voices, 0 }, { hall, 0 }, { distance, 3 }, { reverb, 30 }, { attack, 8 }, { vibrato, 45 },
                                     { width, 150 }, { brightness, 4 }, { lead, -6 }, { fold, 0 },
                                     { sec (0, interval), 2 }, { sec (1, interval), 0 }, { sec (2, interval), 14 },
                                     { sec (0, x), 0.05f }, { sec (0, y), 0.6f }, { sec (1, x), 0.95f }, { sec (1, y), 0.6f },
-                                    { sec (2, x), 0.25f }, { sec (2, y), 0.35f } } },
+                                    { sec (2, x), 0.25f }, { sec (2, y), 0.35f },
+                                    { sec (0, delay), 3 }, { sec (1, delay), 5 }, { sec (2, delay), 7 } } },
         { "Grand chœur de cathédrale", { { size, 6 }, { hall, 3 }, { distance, 14 }, { reverb, 45 }, { attack, 45 } } },
         { "Chœur symphonique", { { size, 5 }, { hall, 2 }, { distance, 10 }, { reverb, 35 } } },
         { "Chœur de chambre", { { size, 3 }, { hall, 2 }, { distance, 6 }, { reverb, 28 }, { attack, 30 }, { humanity, 75 } } },

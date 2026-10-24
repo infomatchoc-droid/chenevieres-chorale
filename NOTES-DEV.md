@@ -42,9 +42,11 @@ Projet démarré le 24/10/2026 ; même chaîne que Chènevières EQ (JUCE 8.0.9,
    - tessiture automatique : **une octave par pupitre**, choisie d'après la hauteur moyenne (~2,5 s) — le plus petit
      déplacement qui tombe à 3 demi-tons à l'intérieur de `kRegisters` — et revue seulement en début de note
      (sinon la ligne saute d'octave en pleine mélodie) ; filet de sécurité à ±5 demi-tons hors tessiture.
-   - chaque marque porte aussi l'**écart** du chanteur à sa note de référence (`dev`) : le choriste chante
-     référence + intervalle + 30 % de cet écart (`kFollow`). Le suivre à 100 % rendait le chœur « robotique »
-     (toutes les voix bougent en parallèle parfait avec le chanteur, comme un harmoniseur).
+   - la note de référence est le **demi-ton chanté** (hystérésis 0,75), même en diatonique : l'intervalle vient de la
+     gamme mais s'applique à ce demi-ton (une note hors gamme reste juste à l'unisson et à l'octave).
+   - chaque marque porte la part de l'écart du chanteur que le choriste **ne suit pas** (`dev`) : il suit la justesse
+     lente (moyenne ~80 ms : glissés, notes basses/hautes) à 90 % et les variations rapides (vibrato) à 20 %.
+     Tout suivre = parallèle robotique ; ne rien suivre (essai à 30 %) = chœur faux par rapport à la voix sur les glissés.
    - non voisé à moins de 50 ms d'une note : le grain est transposé de l'intervalle de cette note (attaques).
 5. **Choristes réels** (`spawnGrain`) : PSOLA, un grain de Hann par période ; vers le grave, grain **asymétrique**
    (0,3 période avant la marque à l'octave au-dessous, 1 période après) : sinon la fin de la période précédente garde
@@ -103,6 +105,7 @@ build/ChoraleSnapshot docs/apercu.png [preset=N] [size=N] [scale=1.5]
 
 | Version | Contenu |
 |---|---|
+| 1.1.1 | Retours de Mathieu (« à 12 s le pitch n'est pas terrible, à partir de 17 s les octaves ne marchent pas ») : (1) la note de référence est le **demi-ton chanté** et non la note de gamme voisine — un ré naturel en mi majeur faisait osciller unisson et octave entre do♯ et ré♯ ; l'intervalle reste tiré de la gamme ; (2) les choristes suivent la justesse **lente** du chanteur (glissés, attaques par en dessous : 90 %, filtre ~80 ms) mais pas ses variations rapides (vibrato : 13 % mesuré) ; (3) retards resserrés : pupitres 6–13 ms (au lieu de 18–34), attaques 25 ms par défaut, 3–7 ms et 8 ms pour Afro / Gospel — sur une mélodie qui saute d'octave, 40–60 ms de retard faisait entendre l'ancienne note ; (4) détecteur : la note est gardée jusqu'au bout de sa queue (seuils 0,45 / -56 dBFS), fins de note transposées jusqu'à 150 ms. Mesure (pupitre seul vs voix, même instant, ±35 cents) : tierce 89,6 %, unisson 86 %, octave 83 %. |
 | 1.1.0 | Stéréo : panoramique d'après la place latérale sur la scène (+ écart interaural ≤ 0,62 ms) au lieu de l'angle vu de loin — le chœur était presque mono (corrélation G/D +0,9). Nouveau réglage **Brillance** (étagère 6,5 kHz, -6…+9 dB, +3 par défaut), disposition par défaut plus large, préréglage **Afro / Gospel studio** calqué sur une vidéo de référence (Wakhama Voice Choir, « Afrobeat Choir ») envoyée par Mathieu : même signature stéréo (chœur seul : corrélation -0,16, référence -0,17). Les préréglages peuvent fixer la place des pupitres. |
 | 1.0.3 | Marques de période par corrélation avec la période précédente, au sous-échantillon près (+ ancrage lent sur le sommet) : jitter d'un choriste 2,1 % → 0,55 % (voix d'origine 0,43 %, mesuré avec Praat) — c'était la principale cause du son « numérique ». Consonnes plus discrètes chez les choristes (grains non voisés à 0,4), vibrato dont la vitesse et l'amplitude flottent. |
 | 1.0.2 | Moins « robotique » (retour de Mathieu) : les choristes ne recopient plus la justesse fine du chanteur (ils chantent la note juste et ne suivent que 30 % de ses inflexions : vibrato, glissés), timbre plus varié d'un choriste à l'autre (formants ±6,5 %, couleur des aigus, niveau qui respire), attaques redistribuées à chaque phrase, masse sans effet de flanger (retards 16–71 ms, double modulation lente, passe-tout de décorrélation). |

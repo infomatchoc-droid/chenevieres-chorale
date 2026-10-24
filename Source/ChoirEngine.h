@@ -53,7 +53,7 @@ struct Params
     bool fold = true;                        // ramener chaque pupitre dans sa tessiture
 
     float detuneCents = 9.0f;                // 0 … 30
-    float attackMs = 40.0f;                  // 0 … 150
+    float attackMs = 25.0f;                  // 0 … 150
     float vibrato = 0.55f;                   // 0 … 1
     float breath = 0.2f;                     // 0 … 1
     float humanity = 0.7f;                   // 0 … 1
