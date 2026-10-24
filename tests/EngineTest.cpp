@@ -206,12 +206,33 @@ int main (int argc, char** argv)
         std::vector<float> l, r; int fsr = 0;
         if (! readWav (argv[1], l, r, fsr)) { std::printf ("lecture impossible : %s\n", argv[1]); return 1; }
         Engine e; e.prepare (fsr, 512);
+        // réglages : nom=valeur (size=0-8 hall=0-3 key=0-11 scale=0-4 female=0/1 mode=0-2 quality=0-2 voices=3/4 fold=0/1
+        //            dist rev attack vib breath hum det lead choir width pre ; s0int=… s0on= s0lvl= s0x= s0y= s0form= s0delay= s0spread=)
         Params p;
-        if (argc >= 4) p.sizeIndex = std::atoi (argv[3]);
-        if (argc >= 5) p.hall = std::atoi (argv[4]);
-        if (argc >= 6) p.sourceFemale = std::atoi (argv[5]) != 0;
-        if (argc >= 7) p.keyRoot = std::atoi (argv[6]);
-        if (argc >= 8) p.scale = std::atoi (argv[7]);
+        for (int a = 3; a < argc; ++a)
+        {
+            const std::string arg = argv[a];
+            const auto eq = arg.find ('=');
+            if (eq == std::string::npos) continue;
+            const std::string k = arg.substr (0, eq);
+            const float v = (float) std::atof (arg.c_str() + eq + 1);
+            if (k == "size") p.sizeIndex = (int) v; else if (k == "hall") p.hall = (int) v; else if (k == "key") p.keyRoot = (int) v;
+            else if (k == "scale") p.scale = (int) v; else if (k == "female") p.sourceFemale = v > 0.5f; else if (k == "mode") p.mode = (HarmonyMode) (int) v;
+            else if (k == "quality") p.quality = (int) v; else if (k == "voices") p.numSections = (int) v; else if (k == "fold") p.fold = v > 0.5f;
+            else if (k == "dist") p.distanceM = v; else if (k == "rev") p.reverb = v / 100; else if (k == "attack") p.attackMs = v;
+            else if (k == "vib") p.vibrato = v / 100; else if (k == "breath") p.breath = v / 100; else if (k == "hum") p.humanity = v / 100;
+            else if (k == "det") p.detuneCents = v; else if (k == "lead") p.leadDb = v; else if (k == "choir") p.choirDb = v;
+            else if (k == "width") p.width = v / 100; else if (k == "pre") p.predelayMs = v;
+            else if (k.size() > 2 && k[0] == 's' && k[1] >= '0' && k[1] <= '3')
+            {
+                auto& s = p.sec[(size_t) (k[1] - '0')];
+                const std::string w = k.substr (2);
+                if (w == "int") s.interval = (int) v; else if (w == "on") s.on = v > 0.5f; else if (w == "lvl") s.levelDb = v;
+                else if (w == "x") s.x = v; else if (w == "y") s.y = v; else if (w == "form") s.formant = v / 100;
+                else if (w == "delay") s.delayMs = v; else if (w == "spread") s.spread = v / 100;
+            }
+            else std::printf ("réglage inconnu : %s\n", k.c_str());
+        }
         e.setParams (p);
         const int lat = e.getLatencySamples();
         std::vector<float> in (l.size() + (size_t) lat + (size_t) fsr * 4, 0.0f);
@@ -220,7 +241,8 @@ int main (int argc, char** argv)
         run (e, in, L, R, 512);
         L.erase (L.begin(), L.begin() + lat); R.erase (R.begin(), R.begin() + lat);
         float pk = 0; for (size_t i = 0; i < L.size(); ++i) pk = std::max (pk, std::max (std::abs (L[i]), std::abs (R[i])));
-        if (pk > 0.98f) for (size_t i = 0; i < L.size(); ++i) { L[i] *= 0.95f / pk; R[i] *= 0.95f / pk; }
+        // normalisé à -1 dBFS crête (comparaison d'écoute)
+        if (pk > 0) for (size_t i = 0; i < L.size(); ++i) { L[i] *= 0.89f / pk; R[i] *= 0.89f / pk; }
         writeWav (argv[2], L, R, fsr);
         std::printf ("écrit : %s (crête %.2f, latence %d)\n", argv[2], pk, lat);
         return 0;

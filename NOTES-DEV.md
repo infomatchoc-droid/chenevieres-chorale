@@ -22,6 +22,10 @@ Projet démarré le 24/10/2026 ; même chaîne que Chènevières EQ (JUCE 8.0.9,
 1. **Entrée** : mono (moyenne L/R). Un retard de `latence` échantillons garde la voix principale alignée sur le chœur.
 2. **Détection de hauteur** : YIN sur le signal décimé à ~12 kHz (anticrénelage Butterworth d'ordre 4), pas de 2,7 ms,
    75–1100 Hz, seuil 0,13, médiane sur 3 estimations, hystérésis de voisement (0,2 / 0,32), porte à -49 dBFS.
+   Contre l'erreur d'octave vers l'aigu (voyelles ouvertes, 2e harmonique fort : vu 25 ms d'erreur sur la voix de Mathieu) :
+   le double / triple de la période est préféré s'il prolonge la note en cours (au plus 16 estimations ≈ 43 ms) ou s'il est
+   très net alors que le premier creux est médiocre. **Ne pas** préférer le multiple dès qu'il est « un peu meilleur » :
+   sur une voix bien périodique c'est souvent le cas, et une erreur d'octave vers le grave fait chanter tout le chœur une octave trop bas.
 3. **Marques de période** (PSOLA) : une par cycle, sur le sommet le plus haut du signal filtré (passe-bas 1,1 kHz, 2 pôles)
    près de la position attendue ; hors voisement, marques régulières toutes les 6 ms.
    Chaque marque porte l'intervalle de chaque pupitre (calculé une fois pour tous les choristes).
@@ -31,8 +35,13 @@ Projet démarré le 24/10/2026 ; même chaîne que Chènevières EQ (JUCE 8.0.9,
    - intervalles fixes : demi-tons de `kIntervals` ;
    - MIDI : S prend la note la plus haute de l'accord, B la plus basse ; octave la plus proche du centre de la tessiture ;
      l'accord reste « verrouillé » quand on relâche les touches ;
-   - tessiture automatique : ±12 tant que la note sort de `kRegisters` (pas en MIDI).
-5. **Choristes réels** (`spawnGrain`) : PSOLA, un grain de Hann par période ; demi-largeur = période × (1 à 1,25 vers le grave) ;
+   - tessiture automatique : **une octave par pupitre**, choisie d'après la hauteur moyenne (~2,5 s) — le plus petit
+     déplacement qui tombe à 3 demi-tons à l'intérieur de `kRegisters` — et revue seulement en début de note
+     (sinon la ligne saute d'octave en pleine mélodie) ; filet de sécurité à ±5 demi-tons hors tessiture.
+   - non voisé à moins de 50 ms d'une note : le grain est transposé de l'intervalle de cette note (attaques).
+5. **Choristes réels** (`spawnGrain`) : PSOLA, un grain de Hann par période ; vers le grave, grain **asymétrique**
+   (0,3 période avant la marque à l'octave au-dessous, 1 période après) : sinon la fin de la période précédente garde
+   la note d'origine audible et l'octave inférieure reste 18 dB trop faible (mesuré sur une vraie voix) ;
    formants = grain lu plus vite / plus lentement (facteur `fF`) ; gain √(fF / r).
    Chaque choriste a ses traits tirés une fois (graine fixe : le même chœur à chaque ouverture) :
    désaccord fixe, dérive lente (nouvelle cible toutes les 0,35–1,45 s), vibrato 4,7–6,2 Hz qui s'installe après 150 ms,
@@ -87,7 +96,16 @@ build/ChoraleSnapshot docs/apercu.png [preset=N] [size=N] [scale=1.5]
 
 | Version | Contenu |
 |---|---|
+| 1.0.1 | Après écoute des voix de Mathieu (24/10/2026) : basse vraiment à l'octave (grain asymétrique vers le grave, sous-octave passée de -18 dB à -3 dB sous la fondamentale), plus d'erreur d'octave du détecteur sur les voyelles à 2e harmonique fort (continuité ≤ 40 ms), tessiture automatique par phrase (une octave par pupitre, revue seulement en début de note), attaques transposées dès la première consonne voisée. |
 | 1.0.0 | Première version : 9 tailles (3–1000), 4 pupitres SATB, harmonie diatonique / intervalles / MIDI, formants SATB, tessiture automatique, scène vue de dessus, réalisme humain, 4 lieux, 12 préréglages. Interface en français. |
+
+## Mesures sur les voix de Mathieu (24/10/2026, deux voix d'homme sèches, 48 kHz)
+
+Chaque pupitre seul, hauteur comparée trame par trame (pyin) sur les passages audibles :
+- voix B (notes tenues, mi majeur) : soprano à l'octave 98 %, basse à l'octave 97 %, alto et ténor à la bonne tierce / sixte
+  (majeure ou mineure selon la note) ~99 % ;
+- voix A (très ornée) : 86–89 % ; le reste = ornements mesurés en passage.
+Fichiers de test : `tests/` ne les contient pas (voix de Mathieu, à garder privées).
 
 ## En attente / idées
 

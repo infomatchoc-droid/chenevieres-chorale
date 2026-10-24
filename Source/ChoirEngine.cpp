@@ -119,6 +119,7 @@ struct PitchTracker
     float lastPeriod = 0;      // en échantillons pleine fréquence
     float hist[3] = { 0, 0, 0 };
     int histN = 0;
+    int octaveHold = 0;
 
     struct Est { double t; float period; bool voiced; };
     static constexpr int kEst = 2048;
@@ -146,7 +147,7 @@ struct PitchTracker
     {
         aa1.reset(); aa2.reset();
         std::fill (ring.begin(), ring.end(), 0.0f);
-        decCount = 0; phase = 0; sinceHop = 0; voiced = false; lastPeriod = 0; histN = 0;
+        decCount = 0; phase = 0; sinceHop = 0; voiced = false; lastPeriod = 0; histN = 0; octaveHold = 0;
         estCount = 0;
     }
 
@@ -202,6 +203,34 @@ struct PitchTracker
             for (int tau = tauMin; tau < tauMax; ++tau) if (d[(size_t) tau] < cm) { cm = d[(size_t) tau]; best = tau; }
         }
         else cm = d[(size_t) best];
+
+        // Erreur d'octave vers l'aigu (2e harmonique très fort, voyelles ouvertes) : on préfère le double
+        // ou le triple de la période quand il est nettement meilleur, ou quand il prolonge la note en cours.
+        // La continuité ne retient pas plus de ~40 ms (un vrai saut d'octave du chanteur finit par passer).
+        if (best > 0)
+        {
+            const float prevD = voiced && lastPeriod > 0 ? lastPeriod / (float) D : 0.0f;
+            bool held = false;
+            for (int k = 3; k >= 2; --k)
+            {
+                const int c = best * k;
+                if (c + 2 > tauMax) continue;
+                const int lo = std::max (tauMin, (int) ((float) c * 0.92f)), hi = std::min (tauMax - 1, (int) ((float) c * 1.08f) + 1);
+                int bk = lo;
+                for (int t = lo; t <= hi; ++t) if (d[(size_t) t] < d[(size_t) bk]) bk = t;
+                const float dk = d[(size_t) bk];
+                const bool continuity = prevD > 0 && std::abs (std::log2 ((float) bk / prevD)) < 0.12f
+                                        && std::abs (std::log2 ((float) best / prevD)) > 0.5f;
+                const bool clearlyBetter = cm > 0.15f && dk < cm * 0.4f;   // premier creux médiocre, multiple très net
+                if (clearlyBetter || (continuity && dk < cm + 0.06f && octaveHold < 16))
+                {
+                    held = ! clearlyBetter;
+                    best = bk; cm = dk;
+                    break;
+                }
+            }
+            octaveHold = held ? octaveHold + 1 : 0;
+        }
 
         float period = 0;
         if (best > tauMin && best < tauMax)
@@ -303,6 +332,9 @@ struct Section
     int singers = 0;            // choristes représentés
     float realGain = 0, massGain = 0, massGainSm = 0;
     int prevDegree = -1000;     // hystérésis du mode diatonique
+    int foldShift = 0;          // octave du pupitre (tessiture automatique)
+    bool foldInit = false;
+    int lastInterval = -1;
 
     static constexpr int kTaps = 8;
     std::array<MassTap, kTaps> taps;
@@ -537,6 +569,8 @@ struct Engine::Impl
     int64_t markCount = 0;
     double lastMarkPos = 0;
     bool lastMarkVoiced = false;
+    float avgMidi = -1.0f;
+    bool noteStart = false;
 
     std::array<Section, kSections> sections;
     Hall hall;
@@ -642,12 +676,12 @@ struct Engine::Impl
         std::fill (dryR.begin(), dryR.end(), 0.0f);
         writePos = 0; lp1 = lp2 = 0;
         pitch.reset(); pitchCursor = 0;
-        markCount = 0; lastMarkPos = 0; lastMarkVoiced = false;
+        markCount = 0; lastMarkPos = 0; lastMarkVoiced = false; avgMidi = -1.0f; noteStart = false;
         for (auto& sec : sections)
         {
             for (auto& v : sec.voices) { v.active = false; v.fadingOut = false; std::fill (v.acc.begin(), v.acc.end(), 0.0f); v.gL = v.gR = v.mono = 0; v.airState = 0; }
             std::fill (sec.massRing.begin(), sec.massRing.end(), 0.0f);
-            sec.massWrite = 0; sec.prevDegree = -1000; sec.levelSm = 0; sec.massGainSm = 0;
+            sec.massWrite = 0; sec.prevDegree = -1000; sec.levelSm = 0; sec.massGainSm = 0; sec.foldInit = false;
             sec.brL.reset(); sec.brR.reset(); sec.brHpL.reset(); sec.brHpR.reset();
             for (auto& t : sec.taps) t.state = 0;
         }
@@ -710,6 +744,9 @@ struct Engine::Impl
                 const float fc = std::clamp (19000.0f / (1.0f + dist / 20.0f), 2500.0f, 19000.0f);
                 air = (float) std::exp (-2.0 * 3.141592653589793 * fc / sr);
             };
+
+            const int ivKey = sp.interval + 100 * (int) applied.mode + 1000 * applied.keyRoot + 20000 * applied.scale;
+            if (ivKey != sec.lastInterval) { sec.lastInterval = ivKey; sec.foldInit = false; }
 
             const float lvl = dbToGain (sp.levelDb);
             for (int i = 0; i < kMaxVoicesPerSection; ++i)
@@ -801,8 +838,44 @@ struct Engine::Impl
                         : (float) iv.semis;
         if (applied.fold)
         {
-            for (int k = 0; k < 4 && midi + off > reg.hi; ++k) off -= 12;
-            for (int k = 0; k < 4 && midi + off < reg.lo; ++k) off += 12;
+            // Une seule octave pour tout le pupitre, choisie d'après la hauteur moyenne de la phrase
+            // (et revue seulement au début d'une note) : la ligne ne saute pas d'octave en pleine mélodie.
+            Section& sec = sections[(size_t) s];
+            if (noteStart || ! sec.foldInit)
+            {
+                const float a = avgMidi + off + (float) sec.foldShift;
+                if (! sec.foldInit || a < reg.lo + 1.0f || a > reg.hi - 1.0f)
+                {
+                    int bestK = 0;
+                    const float a0 = avgMidi + off;
+                    if (a0 < reg.lo + 3.0f || a0 > reg.hi - 3.0f)
+                    {
+                        // le plus petit déplacement d'octave qui tombe bien dans la tessiture, sinon le plus proche du centre
+                        bool found = false;
+                        for (int step = 1; step <= 3 && ! found; ++step)
+                            for (int k : { step, -step })
+                            {
+                                const float t = a0 + 12.0f * (float) k;
+                                if (t >= reg.lo + 3.0f && t <= reg.hi - 3.0f) { bestK = k; found = true; break; }
+                            }
+                        if (! found)
+                        {
+                            float bestD = 1e9f;
+                            for (int k = -3; k <= 3; ++k)
+                            {
+                                const float dd = std::abs (a0 + 12.0f * (float) k - reg.centre);
+                                if (dd < bestD) { bestD = dd; bestK = k; }
+                            }
+                        }
+                    }
+                    sec.foldShift = 12 * bestK;
+                    sec.foldInit = true;
+                }
+            }
+            off += (float) sec.foldShift;
+            // filet de sécurité pour une note très loin de la moyenne
+            for (int k = 0; k < 4 && midi + off > reg.hi + 5.0f; ++k) off -= 12;
+            for (int k = 0; k < 4 && midi + off < reg.lo - 5.0f; ++k) off += 12;
         }
         return off;
     }
@@ -847,6 +920,13 @@ struct Engine::Impl
             m.voiced = voiced;
             m.midi = voiced ? (float) (69.0 + 12.0 * std::log2 (sr / ((double) period * 440.0))) : -1.0f;
             const Mark* prev = markCount > 0 ? &marks[(size_t) ((markCount - 1) % kMarkCap)] : nullptr;
+            if (voiced)
+            {
+                // hauteur moyenne (≈ 2,5 s) et début de note
+                if (avgMidi < 0) avgMidi = m.midi;
+                else avgMidi += (m.midi - avgMidi) * std::min (1.0f, period / (float) sr / 2.5f);
+                noteStart = ! lastMarkVoiced || (prev != nullptr && std::abs (m.midi - prev->midi) > 0.8f);
+            }
             for (int s = 0; s < kSections; ++s)
                 m.offset[s] = voiced ? sectionOffset (s, m.midi) : (prev != nullptr ? prev->offset[s] : 0.0f);
             if (voiced) detectedMidi.store (m.midi, std::memory_order_relaxed);
@@ -887,8 +967,9 @@ struct Engine::Impl
         const float dt = (float) (v.lastTs / sr);
         const float fF = std::clamp (formantBase * (1.0f + 0.035f * hum * v.formant), 0.6f, 1.7f);
 
-        double halfIn, halfOut, centre, Ts;
+        double leftOut, rightOut, centre, Ts;
         float g;
+        float resample = 1.0f;   // lecture accélérée (non voisé près d'une note)
         if (m->voiced)
         {
             const float target = m->offset[s];
@@ -912,38 +993,63 @@ struct Engine::Impl
             const float semis = v.offsetSm + v.detune * applied.detuneCents * 0.01f + v.drift + vib;
             const double r = std::clamp ((double) std::exp2 (semis / 12.0f), 0.25, 4.0);
             const double Ta = m->period;
-            const double hmul = r < 1.0 ? std::min (1.25, 1.0 / r) : 1.0;
-            halfIn = Ta * hmul;
-            halfOut = halfIn / fF;
+            // Vers le grave, le grain devient asymétrique : il commence juste avant l'impulsion de la glotte
+            // et ne garde plus la fin de la période précédente (sinon l'octave inférieure reste faible :
+            // on entendrait surtout la note d'origine). À l'octave au-dessous : 0,3 période avant, 1 après.
+            const double down = std::clamp ((r - 0.5) / 0.5, 0.0, 1.0);
+            const double leftIn = Ta * (0.3 + 0.7 * down), rightIn = Ta;
+            leftOut = leftIn / fF;
+            rightOut = rightIn / fF;
             centre = m->pos;
             Ts = Ta / r;
-            g = (float) (std::sqrt (fF / r));
+            g = (float) (std::sqrt (fF / r) * std::sqrt (2.0 * Ta / (leftIn + rightIn)));
         }
         else
         {
+            // Non voisé. Juste avant ou après une note (attaque pas encore détectée, fin de note), le grain est
+            // transposé de l'intervalle de cette note voisine : sinon le pupitre chanterait un instant la note
+            // de la voix principale avant de rejoindre la sienne. Plus loin (consonnes, souffle) : copie simple.
             v.noteAge = 0;
-            halfOut = Tu;
-            halfIn = Tu * fF;
+            leftOut = rightOut = Tu;
             centre = sp;
             Ts = Tu;
             g = 0.8f;
+            const double near = 0.05 * sr;
+            const Mark* nb = nullptr;
+            for (int64_t c = v.cursor + 1; c < markCount && c <= v.cursor + 12; ++c)
+            {
+                const Mark& mk = marks[(size_t) (c % kMarkCap)];
+                if (mk.pos - sp > near) break;
+                if (mk.voiced) { nb = &mk; break; }
+            }
+            if (nb == nullptr)
+                for (int64_t c = v.cursor; c >= oldest && c >= v.cursor - 12; --c)
+                {
+                    const Mark& mk = marks[(size_t) (c % kMarkCap)];
+                    if (sp - mk.pos > near) break;
+                    if (mk.voiced) { nb = &mk; break; }
+                }
+            if (nb != nullptr)
+            {
+                const float semis = (v.offsetInit ? v.offsetSm : nb->offset[s]) + v.detune * applied.detuneCents * 0.01f;
+                resample = std::clamp (std::exp2 (semis / 12.0f), 0.25f, 4.0f);
+            }
         }
 
-        const int64_t n0 = (int64_t) std::ceil (sp - halfOut), n1 = (int64_t) std::floor (sp + halfOut);
-        const float invHalf = (float) (1.0 / halfOut);
+        const int64_t n0 = (int64_t) std::ceil (sp - leftOut), n1 = (int64_t) std::floor (sp + rightOut);
+        const float invL = (float) (1.0 / leftOut), invR = (float) (1.0 / rightOut);
         const double newest = (double) writePos - 3.0;
         for (int64_t n = std::max (n0, v.cleared + 1); n <= n1; ++n)
         {
             const double k = (double) n - sp;
-            const float w = hann ((float) k * invHalf);
-            double src = centre + k * fF;
+            const float w = hann ((float) k * (k < 0 ? invL : invR));
+            double src = centre + k * fF * resample;
             if (src > newest) src = newest;
             v.acc[(size_t) (n & v.accMask)] += g * w * readIn (src);
         }
         v.nextSynth += Ts;
-        v.lastHalfOut = halfOut;
+        v.lastHalfOut = leftOut;   // le grain suivant commence environ à cette distance avant son centre
         v.lastTs = Ts;
-        (void) halfIn;
     }
 
     float sectionFormant (int s) const
