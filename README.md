@@ -21,6 +21,16 @@ Le chœur virtuel du **Studio des Chènevières** : on pose le plugin sur une vo
 - **Qualité** : Éco, Normale, Haute = 8, 16 ou 32 choristes réellement calculés par pupitre. Au-delà, une « masse » de copies décorrélées épaissit le pupitre.
 - **12 préréglages** : cathédrale, chœur de chambre, gospel, chœur d'hommes, de femmes, moines, unisson massif, accords MIDI…
 
+## MIDI → pupitres (avec ACE Studio)
+
+Pour des choristes au timbre de vrais chanteurs :
+1. Dans ACE Studio, **Vocal To MIDI** sur la voix sèche (notes et paroles), puis exporter le MIDI.
+2. Dans Chènevières Chorale, régler les pupitres (intervalles, 3 ou 4 voix, tonalité ou Auto), puis cliquer
+   **MIDI → pupitres** (ou glisser le fichier .mid sur la fenêtre).
+3. Le plugin écrit à côté du fichier : `nom - Pupitres.mid` (toutes les pistes) et un fichier par pupitre,
+   harmonisés, **paroles comprises**.
+4. Les réimporter dans ACE Studio et faire chanter chaque pupitre en **mode Chœur** avec plusieurs voix.
+
 ## Conseils
 
 - Le plugin aime une voix **sèche, juste et sans effet** (pas de réverbération ni de délai avant lui).

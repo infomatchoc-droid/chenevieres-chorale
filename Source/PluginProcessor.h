@@ -45,6 +45,7 @@ public:
     float getInputLevel() const { return engine.getInputLevel(); }
     float getOutputLevel() const { return engine.getOutputLevel(); }
     int currentPreset = 0;
+    choir::Params currentParams() const { return readParams(); }
 
 private:
     choir::Params readParams() const;

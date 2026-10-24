@@ -92,7 +92,7 @@ private:
     BarParam level, spread, formant, delay;
 };
 
-class ChoraleEditor : public juce::AudioProcessorEditor, private juce::Timer
+class ChoraleEditor : public juce::AudioProcessorEditor, public juce::FileDragAndDropTarget, private juce::Timer
 {
 public:
     explicit ChoraleEditor (ChoraleProcessor&);
@@ -115,6 +115,13 @@ private:
     void paintContent (juce::Graphics&);
     void layoutContent();
     void timerCallback() override;
+
+    // MIDI → pupitres (glisser un .mid sur la fenêtre, ou bouton)
+    bool isInterestedInFileDrag (const juce::StringArray& files) override;
+    void filesDropped (const juce::StringArray& files, int, int) override;
+    void arrangeMidi (const juce::File& f);
+    juce::TextButton midiButton;
+    std::unique_ptr<juce::FileChooser> chooser;
     void select (int s);
     void refreshPresetBox();
 

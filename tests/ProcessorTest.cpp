@@ -2,6 +2,7 @@
 #include "../Source/PluginProcessor.h"
 #include "../Source/ParamIDs.h"
 #include "../Source/Presets.h"
+#include "../Source/MidiArranger.h"
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter();
 
@@ -119,6 +120,70 @@ int main()
                 seen.add (rp->getParameterID());
                 CHECK (rp->getName (64).isNotEmpty(), "paramètre sans nom");
             }
+    }
+
+    std::printf ("6. MIDI → pupitres (paroles conservées)\n");
+    {
+        // mélodie en la majeur avec paroles, comme un export « Vocal To MIDI »
+        juce::MidiFile in; in.setTicksPerQuarterNote (480);
+        juce::MidiMessageSequence conductor, mel;
+        conductor.addEvent (juce::MidiMessage::tempoMetaEvent (600000), 0);
+        conductor.addEvent (juce::MidiMessage::timeSignatureMetaEvent (4, 4), 0);
+        const int pitches[] = { 57, 59, 61, 62, 64, 62, 61, 59, 57, 57, 64, 61 };
+        const char* words[] = { "A", "ve", "Ma", "ri", "a", "gra", "ti", "a", "ple", "na", "Do", "mi" };
+        for (int i = 0; i < 12; ++i)
+        {
+            const double t = i * 480.0;
+            mel.addEvent (juce::MidiMessage::textMetaEvent (5, words[i]), t);
+            mel.addEvent (juce::MidiMessage::noteOn (1, pitches[i], (juce::uint8) 100), t);
+            mel.addEvent (juce::MidiMessage::noteOff (1, pitches[i]), t + 440);
+        }
+        mel.updateMatchedPairs();
+        in.addTrack (conductor); in.addTrack (mel);
+
+        choir::Params p;                         // tonalité Auto
+        p.mode = choir::HarmonyMode::Diatonic;
+        p.sec[0].interval = 2;                   // soprano : tierce au-dessus
+        p.sec[1].interval = 0;                   // alto : unisson
+        p.sec[2].interval = 14;                  // ténor : octave au-dessous
+        p.sec[3].on = false;
+        arranger::Report r;
+        auto out = arranger::arrange (in, p, r);
+        std::printf ("   %s\n", arranger::describe (r).replace ("\n", " | ").toRawUTF8());
+        CHECK (r.ok, "échec : %s", r.error.toRawUTF8());
+        CHECK (r.keyDetected && r.keyRoot == 9 && ! r.minor, "tonalité : %d %d", r.keyRoot, (int) r.minor);
+        CHECK (out.getNumTracks() == 4, "pistes : %d", out.getNumTracks());
+        auto notesOf = [] (const juce::MidiMessageSequence& sq) { juce::Array<int> a; for (auto* e : sq) if (e->message.isNoteOn()) a.add (e->message.getNoteNumber()); return a; };
+        auto lyricsOf = [] (const juce::MidiMessageSequence& sq) { juce::StringArray a; for (auto* e : sq) if (e->message.isMetaEvent() && e->message.getMetaEventType() == 5) a.add (e->message.getTextFromTextMetaEvent()); return a; };
+        const auto sop = notesOf (*out.getTrack (1)), alt = notesOf (*out.getTrack (2)), ten = notesOf (*out.getTrack (3));
+        // tierces diatoniques en la majeur : la→do♯, si→ré, do♯→mi, ré→fa♯, mi→sol♯ (+ octave éventuelle pour la tessiture)
+        const int thirds[] = { 61, 62, 64, 66, 68, 66, 64, 62, 61, 61, 68, 64 };
+        bool okS = sop.size() == 12, okA = alt.size() == 12, okT = ten.size() == 12;
+        for (int i = 0; i < 12 && okS; ++i) okS = ((sop[i] - thirds[i]) % 12 == 0);
+        for (int i = 0; i < 12 && okA; ++i) okA = ((alt[i] - pitches[i]) % 12 == 0);
+        for (int i = 0; i < 12 && okT; ++i) okT = (ten[i] == pitches[i] - 12);
+        CHECK (okS, "soprano : tierces diatoniques");
+        CHECK (okA, "alto : unisson (à l'octave près)");
+        CHECK (okT, "ténor : octave au-dessous");
+        int shiftS = sop.isEmpty() ? 0 : sop[0] - thirds[0];
+        bool sameOct = true; for (int i = 0; i < sop.size(); ++i) if (sop[i] - thirds[i] != shiftS) sameOct = false;
+        CHECK (sameOct, "soprano : une seule octave pour toute la ligne");
+        for (int t = 1; t <= 3; ++t)
+            CHECK (lyricsOf (*out.getTrack (t)).joinIntoString (" ") == "A ve Ma ri a gra ti a ple na Do mi", "paroles de la piste %d", t);
+        bool tempo = false; for (auto* e : *out.getTrack (0)) if (e->message.isTempoMetaEvent()) tempo = true;
+        CHECK (tempo, "tempo conservé");
+        // écriture et relecture d'un fichier
+        auto tmp = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("melodie test.mid");
+        { tmp.deleteFile(); juce::FileOutputStream os (tmp); in.writeTo (os, 1); }
+        const auto rf = arranger::arrangeFile (tmp, p);
+        CHECK (rf.ok && rf.files.size() == 4, "fichiers écrits : %d", rf.files.size());
+        for (const auto& f : rf.files)
+        {
+            juce::MidiFile back; juce::FileInputStream is (f);
+            CHECK (back.readFrom (is) && back.getNumTracks() >= 2, "relecture de %s", f.getFileName().toRawUTF8());
+            f.deleteFile();
+        }
+        tmp.deleteFile();
     }
 
     std::printf (failures == 0 ? "\nTOUT EST OK\n" : "\n%d ÉCHEC(S)\n", failures);

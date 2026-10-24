@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(ChenevieresChorale VERSION 1.3.0)
+project(ChenevieresChorale VERSION 1.4.0)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -74,6 +74,7 @@ juce_add_binary_data(ChenevieresChoraleData SOURCES
 target_sources(ChenevieresChorale PRIVATE
     Source/ChoirEngine.cpp
     Source/Presets.cpp
+    Source/MidiArranger.cpp
     Source/PluginProcessor.cpp
     Source/StageView.cpp
     Source/PluginEditor.cpp)

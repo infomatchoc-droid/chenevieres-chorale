@@ -1,6 +1,7 @@
 #include "PluginEditor.h"
 #include "ParamIDs.h"
 #include "Presets.h"
+#include "MidiArranger.h"
 
 using namespace theme;
 using names::u;
@@ -332,6 +333,16 @@ ChoraleEditor::ChoraleEditor (ChoraleProcessor& p)
     content.addAndMakeVisible (qualityBox);
     qualityAtt = std::make_unique<APVTS::ComboBoxAttachment> (apvts, ids::quality, qualityBox);
 
+    midiButton.setButtonText (u ("MIDI → pupitres"));
+    midiButton.setTooltip (u ("Choisir (ou glisser sur la fenêtre) la mélodie en MIDI — par exemple « Vocal To MIDI » d'ACE Studio : "
+                              "le plugin écrit une piste par pupitre, harmonisée et avec les paroles, à réimporter dans ACE Studio"));
+    midiButton.onClick = [this] {
+        chooser = std::make_unique<juce::FileChooser> (u ("Mélodie en MIDI (avec ses paroles)"), juce::File(), "*.mid;*.midi");
+        chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                              [this] (const juce::FileChooser& fc) { if (fc.getResult().existsAsFile()) arrangeMidi (fc.getResult()); });
+    };
+    content.addAndMakeVisible (midiButton);
+
     select (2);
 
     setResizable (true, true);
@@ -364,6 +375,35 @@ void ChoraleEditor::select (int s)
 
 void ChoraleEditor::paint (juce::Graphics& g) { g.fillAll (bg); }
 
+bool ChoraleEditor::isInterestedInFileDrag (const juce::StringArray& files)
+{
+    for (const auto& f : files) if (f.endsWithIgnoreCase (".mid") || f.endsWithIgnoreCase (".midi")) return true;
+    return false;
+}
+
+void ChoraleEditor::filesDropped (const juce::StringArray& files, int, int)
+{
+    for (const auto& f : files)
+        if (f.endsWithIgnoreCase (".mid") || f.endsWithIgnoreCase (".midi")) { arrangeMidi (juce::File (f)); return; }
+}
+
+void ChoraleEditor::arrangeMidi (const juce::File& f)
+{
+    const auto r = arranger::arrangeFile (f, proc.currentParams());
+    auto opts = juce::MessageBoxOptions()
+                    .withIconType (r.ok ? juce::MessageBoxIconType::InfoIcon : juce::MessageBoxIconType::WarningIcon)
+                    .withTitle (r.ok ? u ("Pupitres écrits") : u ("MIDI → pupitres"))
+                    .withMessage (arranger::describe (r))
+                    .withAssociatedComponent (this);
+    if (r.ok)
+    {
+        const auto folder = r.files.getFirst();
+        juce::AlertWindow::showAsync (opts.withButton (u ("Ouvrir le dossier")).withButton ("OK"),
+                                      [folder] (int result) { if (result == 1) folder.revealToUser(); });
+    }
+    else juce::AlertWindow::showAsync (opts.withButton ("OK"), nullptr);
+}
+
 void ChoraleEditor::resized()
 {
     const float scale = (float) getWidth() / (float) baseW;
@@ -391,8 +431,9 @@ void ChoraleEditor::layoutContent()
     stageView.setBounds (176, 104, 600, 510);
 
     sectionsArea = { 792, 80, 428, 16 };
-    voiceButtons.setBounds (1220 - 132, 74, 132, 28);
-    foldButton.setBounds (1220 - 132 - 150, 74, 140, 28);
+    voiceButtons.setBounds (1220 - 112, 74, 112, 28);
+    foldButton.setBounds (1220 - 112 - 130, 74, 124, 28);
+    midiButton.setBounds (1220 - 112 - 130 - 112, 74, 106, 28);
     for (int s = 0; s < cards.size(); ++s) cards[s]->setBounds (792, 110 + s * 128, 428, 120);
 
     // bas : quatre groupes
