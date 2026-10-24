@@ -45,6 +45,7 @@ Params::Params()
 namespace
 {
 constexpr float kPi = 3.14159265358979f;
+double kLowCutHz = 130.0, kPresenceHz = 700.0, kPresenceDb = 8.5, kAirHz = 7000.0;   // timbre du chœur
 constexpr double kMinF0 = 75.0;     // plus grave détecté (latence = 4 périodes de cette note)
 constexpr double kMaxF0 = 1100.0;
 
@@ -605,7 +606,8 @@ struct Engine::Impl
     std::vector<float> busL, busR, mono;
     float envIn = 0, envCoefA = 0, envCoefR = 0;
     float leadSm = 0, choirSm = 0, outSm = 0, wetSm = 0, widthSm = 1;
-    Biquad shelfL, shelfR;   // brillance du chœur
+    // Timbre du chœur (mesuré sur une référence du commerce, voix identique) : coupe-bas doux, présence, air
+    Biquad hpL, hpR, presL, presR, shelfL, shelfR;
     float gainSmCoef = 0;
 
     std::atomic<float> detectedMidi { -1.0f };
@@ -713,7 +715,7 @@ struct Engine::Impl
             for (auto& t : sec.taps) { t.state = 0; t.apX = t.apY = 0; }
         }
         hall.clear();
-        shelfL.reset(); shelfR.reset();
+        shelfL.reset(); shelfR.reset(); hpL.reset(); hpR.reset(); presL.reset(); presR.reset();
         envIn = 0;
         detectedMidi.store (-1.0f);
     }
@@ -1266,9 +1268,14 @@ struct Engine::Impl
             const bool first = firstParams;
             applied = p; firstParams = false;
             hall.setHall (applied.hall); hall.setPredelay (applied.predelayMs);
-            shelfL.setHighShelf (sr, 6500.0, applied.brightnessDb);
-            shelfR.setHighShelf (sr, 6500.0, applied.brightnessDb);
-            if (first) { shelfL.reset(); shelfR.reset(); }
+            shelfL.setHighShelf (sr, kAirHz, applied.brightnessDb);
+            shelfR.setHighShelf (sr, kAirHz, applied.brightnessDb);
+            if (first)
+            {
+                hpL.set (sr, kLowCutHz, 0.6, 1); hpR.set (sr, kLowCutHz, 0.6, 1);
+                presL.setHighShelf (sr, kPresenceHz, kPresenceDb); presR.setHighShelf (sr, kPresenceHz, kPresenceDb);
+                shelfL.reset(); shelfR.reset(); hpL.reset(); hpR.reset(); presL.reset(); presR.reset();
+            }
             updateGeometry();
         }
         if (chordDirty) { rebuildChord(); chordDirty = false; }
@@ -1378,8 +1385,8 @@ struct Engine::Impl
             wetSm += (wetT - wetSm) * gainSmCoef;
             widthSm += (widthT - widthSm) * gainSmCoef;
 
-            L[i] = shelfL.process (L[i]);
-            R[i] = shelfR.process (R[i]);
+            L[i] = shelfL.process (presL.process (hpL.process (L[i])));
+            R[i] = shelfR.process (presR.process (hpR.process (R[i])));
             float wl, wr;
             hall.process (L[i], R[i], wl, wr);
             float cl = L[i] * (1.0f - 0.3f * wetSm) + wl * wetSm;

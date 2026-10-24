@@ -17,7 +17,7 @@ const std::vector<Preset>& all()
     static const std::vector<Preset> list = {
         { "Chœur de cathédrale", {} },   // = réglages par défaut
         { "Afro / Gospel studio", { { size, 2 }, { voices, 0 }, { hall, 0 }, { distance, 3 }, { reverb, 30 }, { attack, 8 }, { vibrato, 45 },
-                                    { width, 150 }, { brightness, 4 }, { lead, -6 }, { fold, 0 },
+                                    { width, 150 }, { brightness, 7 }, { lead, -6 }, { fold, 0 }, { detune, 14 }, { breath, 30 },
                                     { sec (0, interval), 2 }, { sec (1, interval), 0 }, { sec (2, interval), 14 },
                                     { sec (0, x), 0.05f }, { sec (0, y), 0.6f }, { sec (1, x), 0.95f }, { sec (1, y), 0.6f },
                                     { sec (2, x), 0.25f }, { sec (2, y), 0.35f },
