@@ -26,8 +26,12 @@ Projet démarré le 24/10/2026 ; même chaîne que Chènevières EQ (JUCE 8.0.9,
    le double / triple de la période est préféré s'il prolonge la note en cours (au plus 16 estimations ≈ 43 ms) ou s'il est
    très net alors que le premier creux est médiocre. **Ne pas** préférer le multiple dès qu'il est « un peu meilleur » :
    sur une voix bien périodique c'est souvent le cas, et une erreur d'octave vers le grave fait chanter tout le chœur une octave trop bas.
-3. **Marques de période** (PSOLA) : une par cycle, sur le sommet le plus haut du signal filtré (passe-bas 1,1 kHz, 2 pôles)
-   près de la position attendue ; hors voisement, marques régulières toutes les 6 ms.
+3. **Marques de période** (PSOLA) : une par cycle. Attaque de note : sommet le plus haut du signal filtré (passe-bas
+   1,1 kHz, 2 pôles). Pendant la note : **corrélation normalisée** avec la période précédente (±18 % de période,
+   interpolation parabolique → sous-échantillon), ancrée lentement (8 %) sur le sommet pour ne pas dériver.
+   Le sommet seul faisait varier l'écart entre marques de 256 à 269 échantillons sur une note tenue : chaque erreur
+   devenait une irrégularité de période chez le choriste (jitter ×5, son rugueux). Mesure : `pip install praat-parselmouth`,
+   « Get jitter (local) » sur un choriste seul ; hors voisement, marques régulières toutes les 6 ms.
    Chaque marque porte l'intervalle de chaque pupitre (calculé une fois pour tous les choristes).
 4. **Harmonie** (`sectionOffset`) :
    - diatonique : note de gamme la plus proche (hystérésis de 0,75 demi-ton), degré + pas de l'intervalle ;
@@ -99,6 +103,7 @@ build/ChoraleSnapshot docs/apercu.png [preset=N] [size=N] [scale=1.5]
 
 | Version | Contenu |
 |---|---|
+| 1.0.3 | Marques de période par corrélation avec la période précédente, au sous-échantillon près (+ ancrage lent sur le sommet) : jitter d'un choriste 2,1 % → 0,55 % (voix d'origine 0,43 %, mesuré avec Praat) — c'était la principale cause du son « numérique ». Consonnes plus discrètes chez les choristes (grains non voisés à 0,4), vibrato dont la vitesse et l'amplitude flottent. |
 | 1.0.2 | Moins « robotique » (retour de Mathieu) : les choristes ne recopient plus la justesse fine du chanteur (ils chantent la note juste et ne suivent que 30 % de ses inflexions : vibrato, glissés), timbre plus varié d'un choriste à l'autre (formants ±6,5 %, couleur des aigus, niveau qui respire), attaques redistribuées à chaque phrase, masse sans effet de flanger (retards 16–71 ms, double modulation lente, passe-tout de décorrélation). |
 | 1.0.1 | Après écoute des voix de Mathieu (24/10/2026) : basse vraiment à l'octave (grain asymétrique vers le grave, sous-octave passée de -18 dB à -3 dB sous la fondamentale), plus d'erreur d'octave du détecteur sur les voyelles à 2e harmonique fort (continuité ≤ 40 ms), tessiture automatique par phrase (une octave par pupitre, revue seulement en début de note), attaques transposées dès la première consonne voisée. |
 | 1.0.0 | Première version : 9 tailles (3–1000), 4 pupitres SATB, harmonie diatonique / intervalles / MIDI, formants SATB, tessiture automatique, scène vue de dessus, réalisme humain, 4 lieux, 12 préréglages. Interface en français. |

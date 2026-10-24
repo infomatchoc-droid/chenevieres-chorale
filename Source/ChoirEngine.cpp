@@ -315,6 +315,7 @@ struct Voice
     float tone = 1, ampRate = 0.3f, ampPhase = 0;   // couleur (aigus) et respiration du niveau
     float delayBase = 0, attackSpread = 0;          // retard sans l'attaque ; dispersion (redistribuée à chaque phrase)
     bool inGap = true;
+    float vibWander = 0;
 
     // espace
     float delay = 0, delayTarget = 0;
@@ -947,8 +948,62 @@ struct Engine::Impl
                     if (x > best) { best = x; bi = k; }
                 }
                 pos = (double) bi;
+
+                if (lastMarkVoiced)
+                {
+                    // Pendant une note : la marque est placée par corrélation avec la période précédente, au
+                    // sous-échantillon près (le sommet seul « saute » d'un cycle à l'autre et donnait au choriste
+                    // un jitter 5 fois plus fort que celui de la voix : son rugueux, robotique).
+                    const int r0 = (int) std::lround (lastMarkPos);
+                    const double frac0 = lastMarkPos - (double) r0;
+                    const int half = std::max (8, (int) (0.5f * period));
+                    const int rad2 = std::max (2, (int) (0.18f * period));
+                    const int base = (int) std::lround (cand) - r0;   // décalage attendu (≈ une période)
+                    const int step = period > 400 ? 2 : 1;
+                    double ref2 = 0;
+                    for (int k = -half; k <= half; k += step) { const float a = inLp[(size_t) ((r0 + k) & inMask)]; ref2 += (double) a * a; }
+                    double bestC = -2, cPrev = 0, cNext = 0;
+                    int bestL = base;
+                    std::array<double, 3> win { 0, 0, 0 };
+                    double prevC = -2;
+                    for (int L = base - rad2; L <= base + rad2; ++L)
+                    {
+                        double xy = 0, y2 = 0;
+                        for (int k = -half; k <= half; k += step)
+                        {
+                            const float a = inLp[(size_t) ((r0 + k) & inMask)], b = inLp[(size_t) ((r0 + L + k) & inMask)];
+                            xy += (double) a * b; y2 += (double) b * b;
+                        }
+                        const double c = (ref2 > 0 && y2 > 0) ? xy / std::sqrt (ref2 * y2) : 0.0;
+                        if (c > bestC) { bestC = c; bestL = L; cPrev = prevC; win[0] = prevC; win[1] = c; win[2] = -2; }
+                        else if (L == bestL + 1) { win[2] = c; }
+                        prevC = c;
+                    }
+                    cNext = win[2];
+                    if (bestC > 0.6)
+                    {
+                        double fr = 0;
+                        if (cPrev > -1.5 && cNext > -1.5)
+                        {
+                            const double den = cPrev - 2 * bestC + cNext;
+                            if (std::abs (den) > 1e-12) fr = std::clamp (0.5 * (cPrev - cNext) / den, -0.5, 0.5);
+                        }
+                        const double corrPos = lastMarkPos + (double) bestL + fr;
+                        (void) frac0;
+                        // ancrage très lent sur le sommet, pour ne pas dériver au fil d'une longue note
+                        const double drift = (double) bi - corrPos;
+                        pos = corrPos + (std::abs (drift) < 0.25 * period ? 0.08 * drift : 0.0);
+                    }
+                }
+
                 const double minGap = 0.55 * period;
                 if (pos < lastMarkPos + minGap) pos = lastMarkPos + minGap;
+                // la période de la marque : l'écart réel aux marques voisines quand la note continue
+                if (lastMarkVoiced)
+                {
+                    const double gap = pos - lastMarkPos;
+                    if (gap > 0.8 * period && gap < 1.25 * period) period = (float) (0.5 * (gap + period));
+                }
             }
 
             Mark& m = marks[(size_t) (markCount % kMarkCap)];
@@ -1026,10 +1081,13 @@ struct Engine::Impl
             if (v.driftTimer <= 0) { v.driftTarget = v.rng.gauss() * applied.detuneCents * 0.006f * hum; v.driftTimer = 0.35f + 1.1f * v.rng.uni(); }
             v.drift += (v.driftTarget - v.drift) * (dt / (0.4f + dt));
 
-            v.vibPhase += 2 * kPi * v.vibRate * dt;
+            // vibrato vivant : la vitesse et l'amplitude flottent un peu, comme chez un chanteur
+            v.vibWander += (v.rng.bi() * 0.5f - v.vibWander * 0.02f) * dt * 6.0f;
+            v.vibWander = std::clamp (v.vibWander, -1.0f, 1.0f);
+            v.vibPhase += 2 * kPi * v.vibRate * (1.0f + 0.07f * v.vibWander) * dt;
             if (v.vibPhase > 2 * kPi) v.vibPhase -= 2 * kPi;
             const float env = std::clamp ((v.noteAge - 0.15f) / 0.5f, 0.0f, 1.0f);
-            const float vib = applied.vibrato * 0.38f * v.vibDepth * env * std::sin (v.vibPhase);
+            const float vib = applied.vibrato * 0.38f * v.vibDepth * (1.0f + 0.25f * v.vibWander) * env * std::sin (v.vibPhase);
 
             // Le choriste ne recopie pas le vibrato ni les glissés de la voix principale : il chante la note juste,
             // avec seulement une part de ses inflexions (kFollow), et son propre vibrato, sa propre dérive.
@@ -1059,7 +1117,7 @@ struct Engine::Impl
             leftOut = rightOut = Tu;
             centre = sp;
             Ts = Tu;
-            g = 0.8f;
+            g = 0.4f;   // consonnes et souffle : discrets chez les choristes (la voix principale les porte)
             if (! v.inGap)
             {
                 // nouvelle phrase : chaque choriste attaque un peu différemment de la fois précédente
@@ -1085,6 +1143,7 @@ struct Engine::Impl
             {
                 const float semis = (v.offsetInit ? v.offsetSm : nb->offset[s]) - (1.0f - kFollow) * nb->dev[s] + v.detune * applied.detuneCents * 0.01f;
                 resample = std::clamp (std::exp2 (semis / 12.0f), 0.25f, 4.0f);
+                g = 0.8f;
             }
         }
 
