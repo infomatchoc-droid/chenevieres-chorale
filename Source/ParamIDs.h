@@ -52,7 +52,7 @@ inline juce::StringArray sizes()
     return a;
 }
 inline juce::StringArray modes() { return { u ("Diatonique"), u ("Intervalles"), u ("MIDI") }; }
-inline juce::StringArray keys() { return { u ("Do"), u ("Do♯"), u ("Ré"), u ("Mi♭"), u ("Mi"), u ("Fa"), u ("Fa♯"), u ("Sol"), u ("La♭"), u ("La"), u ("Si♭"), u ("Si") }; }
+inline juce::StringArray keys() { return { u ("Do"), u ("Do♯"), u ("Ré"), u ("Mi♭"), u ("Mi"), u ("Fa"), u ("Fa♯"), u ("Sol"), u ("La♭"), u ("La"), u ("Si♭"), u ("Si"), u ("Auto") }; }
 inline juce::StringArray scales() { return { u ("majeur"), u ("mineur"), u ("mineur harmonique"), u ("dorien"), u ("mixolydien") }; }
 inline juce::StringArray sources() { return { u ("Homme"), u ("Femme") }; }
 inline juce::StringArray voiceCounts() { return { u ("3 voix"), u ("4 voix") }; }

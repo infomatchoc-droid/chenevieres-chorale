@@ -41,6 +41,7 @@ public:
     // pour l'interface
     float getDetectedMidi() const { return engine.getDetectedMidi(); }
     int getActiveVoices() const { return engine.getActiveVoices(); }
+    int getDetectedKey() const { return engine.getDetectedKey(); }
     float getInputLevel() const { return engine.getInputLevel(); }
     float getOutputLevel() const { return engine.getOutputLevel(); }
     int currentPreset = 0;

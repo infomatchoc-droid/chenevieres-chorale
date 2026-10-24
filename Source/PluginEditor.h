@@ -138,7 +138,7 @@ private:
     // zones dessinées
     juce::Rectangle<float> headerArea, sizeArea, stageCaption, sectionsArea, noteArea, meterArea;
     juce::Rectangle<float> groupArea[4];
-    juce::String noteText = "-";
+    juce::String noteText = "-", keyText;
     float meterLevel = 0;
     int lastVoices = -1;
     juce::String lastStageInfo;

@@ -322,6 +322,10 @@ struct Voice
     bool offsetInit = false;
     float drift = 0, driftTarget = 0, driftTimer = 0, vibPhase = 0;
     float tone = 1, ampRate = 0.3f, ampPhase = 0;   // couleur (aigus) et respiration du niveau
+    // signature de phase propre au choriste (3 passe-tout) : des copies d'une même voix ne s'additionnent plus
+    // en « peigne » (son métallique)
+    float apc[3] {}, apxL[3] {}, apyL[3] {}, apxR[3] {}, apyR[3] {};
+    float rampTime = 0.04f, phraseAge = 1.0f;       // entrée en fondu à chaque phrase
     float delayBase = 0, attackSpread = 0;          // retard sans l'attaque ; dispersion (redistribuée à chaque phrase)
     bool inGap = true;
     float vibWander = 0;
@@ -339,7 +343,7 @@ struct Voice
 struct MassTap
 {
     float delayBase = 0, depth = 0, rate = 0, phase = 0, gL = 0, gR = 0, airCoef = 0, state = 0;
-    float rate2 = 0.2f, phase2 = 0, ap = 0, apX = 0, apY = 0;   // 2e modulation, passe-tout de décorrélation
+    float rate2 = 0.2f, phase2 = 0, ap = 0, apX = 0, apY = 0, rDelay = 0.5f;   // 2e modulation, passe-tout de décorrélation
 };
 
 struct Section
@@ -591,6 +595,9 @@ struct Engine::Impl
     bool lastMarkVoiced = false;
     float avgMidi = -1.0f;
     bool noteStart = false;
+    float keyHist[12] {}, keyHistTotal = 0, keyTimer = 0;
+    int keyDetected = -1, keyPending = 0;
+    std::atomic<int> keyOut { -1 };
 
     std::array<Section, kSections> sections;
     Hall hall;
@@ -659,6 +666,8 @@ struct Engine::Impl
                 v.formant = r.gauss();
                 v.amp = r.gauss();
                 v.tone = 0.6f + 0.8f * r.uni();
+                for (int k = 0; k < 3; ++k) v.apc[k] = (0.25f + 0.5f * r.uni()) * (r.uni() < 0.5f ? -1.0f : 1.0f);
+                v.rampTime = 0.02f + 0.04f * r.uni();
                 v.ampRate = 0.12f + 0.45f * r.uni();
                 v.ampPhase = 2 * kPi * r.uni();
                 const float rad = std::sqrt (((float) i + 0.5f) / (float) kMaxVoicesPerSection);
@@ -673,7 +682,8 @@ struct Engine::Impl
             Rng r ((uint32_t) (0x7a11 + s * 4099));
             for (auto& t : sec.taps)
             {
-                t.delayBase = 0.016f + 0.055f * r.uni();
+                t.rDelay = r.uni();
+                t.delayBase = 0.016f + 0.055f * t.rDelay;
                 t.depth = 0.0004f + 0.0008f * r.uni();
                 t.rate = 0.05f + 0.10f * r.uni();
                 t.rate2 = 0.13f + 0.19f * r.uni();
@@ -706,6 +716,7 @@ struct Engine::Impl
         writePos = 0; lp1 = lp2 = 0;
         pitch.reset(); pitchCursor = 0;
         markCount = 0; lastMarkPos = 0; lastMarkVoiced = false; avgMidi = -1.0f; noteStart = false;
+        std::fill (std::begin (keyHist), std::end (keyHist), 0.0f); keyHistTotal = 0; keyTimer = 0; keyDetected = -1; keyPending = 0; keyOut.store (-1);
         for (auto& sec : sections)
         {
             for (auto& v : sec.voices) { v.active = false; v.fadingOut = false; std::fill (v.acc.begin(), v.acc.end(), 0.0f); v.gL = v.gR = v.mono = 0; v.airState = 0; }
@@ -755,8 +766,15 @@ struct Engine::Impl
             const float E = (float) per / (float) std::max (1, real);
             sec.singers = on ? per : 0;
             sec.realCount = real;
-            sec.realGain = real > 0 ? std::sqrt (1.0f / E) / std::sqrt ((float) real) * loud : 0.0f;
-            sec.massGain = (on && E > 1.0f) ? std::sqrt ((E - 1.0f) / E) * loud / std::sqrt ((float) Section::kTaps) : 0.0f;
+            // Puissance : choristes calculés 1/E, masse (E-1)/E. Même un petit chœur garde au moins 30 % de « densité »
+            // (copies courtes décorrélées) : sinon 3 choristes identiques ne sonnent pas comme un groupe.
+            float massPow = (E - 1.0f) / E;
+            massPow = std::max (massPow, 0.3f);
+            sec.realGain = real > 0 ? std::sqrt (1.0f - massPow) / std::sqrt ((float) real) * loud : 0.0f;
+            sec.massGain = on ? std::sqrt (massPow) * loud / std::sqrt ((float) Section::kTaps) : 0.0f;
+            // retards de la masse : courts pour un petit groupe serré, longs pour une foule
+            const float big = std::clamp (std::log10 ((float) N / 20.0f) / std::log10 (15.0f), 0.0f, 1.0f);
+            for (auto& t : sec.taps) t.delayBase = (0.006f + 0.010f * big) + (0.020f + 0.035f * big) * t.rDelay;
 
             const float cx = (sp.x - 0.5f) * stageW, cy = sp.y * stageD;
             const float R = std::sqrt ((float) per * 0.55f / kPi) * (0.45f + 1.1f * sp.spread) + 0.15f;
@@ -844,12 +862,52 @@ struct Engine::Impl
         v.lastTarget = 1e9f;
         v.noteAge = 0;
         v.gL = v.gR = 0; v.mono = 0; v.airState = 0; v.airStateR = 0; v.itdSm = v.itd;
+        for (int k = 0; k < 3; ++k) v.apxL[k] = v.apyL[k] = v.apxR[k] = v.apyR[k] = 0;
         v.lastHalfOut = Tu; v.lastTs = Tu;
         (void) s;
     }
 
     //--------------------------------------------------------------------------
     // Intervalle (demi-tons) d'un pupitre pour une note chantée
+    // Tonalité automatique : durée de chaque classe de note chantée (oubli en ~25 s), comparée aux profils de
+    // Krumhansl-Kessler des 24 tonalités ; on ne change d'avis que si la nouvelle est nettement meilleure, deux fois.
+    void updateKey (float midi, float dt)
+    {
+        const float decay = std::exp (-dt / 60.0f);   // mémoire longue : une tonalité ne change pas toutes les 10 s
+        for (auto& h : keyHist) h *= decay;
+        keyHist[((int) std::lround (midi) % 12 + 12) % 12] += dt;
+        keyHistTotal = keyHistTotal * decay + dt;
+        keyTimer += dt;
+        if (keyTimer < 0.4f || keyHistTotal < 2.0f) return;
+        keyTimer = 0;
+        static const float maj[12] = { 6.35f, 2.23f, 3.48f, 2.33f, 4.38f, 4.09f, 2.52f, 5.19f, 2.39f, 3.66f, 2.29f, 2.88f };
+        static const float mnr[12] = { 6.33f, 2.68f, 3.52f, 5.38f, 2.60f, 3.53f, 2.54f, 4.75f, 3.98f, 2.69f, 3.34f, 3.17f };
+        auto corr = [this] (const float* prof, int root)
+        {
+            float mx = 0, my = 0;
+            for (int i = 0; i < 12; ++i) { mx += keyHist[i]; my += prof[(i - root + 12) % 12]; }
+            mx /= 12; my /= 12;
+            float sxy = 0, sxx = 0, syy = 0;
+            for (int i = 0; i < 12; ++i)
+            {
+                const float a = keyHist[i] - mx, b = prof[(i - root + 12) % 12] - my;
+                sxy += a * b; sxx += a * a; syy += b * b;
+            }
+            return sxx > 0 && syy > 0 ? sxy / std::sqrt (sxx * syy) : 0.0f;
+        };
+        int best = 0; float bestC = -2, curC = -2;
+        for (int k = 0; k < 24; ++k)
+        {
+            const float c = corr (k < 12 ? maj : mnr, k % 12);
+            if (c > bestC) { bestC = c; best = k; }
+            if (k == keyDetected) curC = c;
+        }
+        if (keyDetected < 0) { keyDetected = best; keyPending = 0; }
+        else if (best != keyDetected && bestC > curC + 0.08f) { if (++keyPending >= 5) { keyDetected = best; keyPending = 0; } }
+        else keyPending = 0;
+        keyOut.store (keyDetected, std::memory_order_relaxed);
+    }
+
     // Note « juste » la plus proche, avec hystérésis (modes intervalles et MIDI)
     static float nearestNote (float midi, float& prevRef)
     {
@@ -888,7 +946,10 @@ struct Engine::Impl
             // L'intervalle vient de la gamme (tierce majeure ou mineure selon le degré), mais il s'applique au
             // demi-ton réellement chanté : une note hors gamme (ré naturel en mi majeur…) reste juste à l'unisson
             // et à l'octave, au lieu d'être tirée vers la note de gamme voisine (le pupitre chantait faux).
-            off = diatonicOffset (midi, applied.keyRoot, applied.scale, iv.steps, &sct.prevDegree);
+            int kr = applied.keyRoot, ks = applied.scale;
+            if (kr == kKeyAuto) { const int k = keyDetected; kr = k < 0 ? -1 : k % 12; ks = k >= 12 ? 1 : 0; }
+            off = kr < 0 ? (float) iv.semis   // tonalité pas encore trouvée : intervalles fixes
+                         : diatonicOffset (midi, kr, ks, iv.steps, &sct.prevDegree);
             ref = nearestNote (midi, sct.prevRef);
         }
         else
@@ -1035,6 +1096,7 @@ struct Engine::Impl
             m.voiced = voiced;
             m.midi = voiced ? (float) (69.0 + 12.0 * std::log2 (sr / ((double) period * 440.0))) : -1.0f;
             const Mark* prev = markCount > 0 ? &marks[(size_t) ((markCount - 1) % kMarkCap)] : nullptr;
+            if (voiced) updateKey (m.midi, period / (float) sr);
             if (voiced)
             {
                 // hauteur moyenne (≈ 2,5 s) et début de note
@@ -1096,7 +1158,7 @@ struct Engine::Impl
 
         const float hum = applied.humanity;
         const float dt = (float) (v.lastTs / sr);
-        const float fF = std::clamp (formantBase * (1.0f + 0.065f * hum * v.formant), 0.6f, 1.7f);
+        const float fF = std::clamp (formantBase * (1.0f + 0.09f * hum * v.formant), 0.6f, 1.7f);
 
         double leftOut, rightOut, centre, Ts;
         float g;
@@ -1105,6 +1167,7 @@ struct Engine::Impl
         {
             const float target = m->offset[s];
             if (! v.offsetInit) { v.offsetSm = target; v.offsetInit = true; }
+            if (v.inGap) v.phraseAge = 0.0f;   // nouvelle phrase : le choriste entre en fondu, à son rythme
             v.inGap = false;
             if (std::abs (target - v.lastTarget) > 0.5f) v.noteAge = 0;
             v.lastTarget = target;
@@ -1143,6 +1206,12 @@ struct Engine::Impl
             v.ampPhase += 2 * kPi * v.ampRate * dt;
             if (v.ampPhase > 2 * kPi) v.ampPhase -= 2 * kPi;
             g *= 1.0f + 0.16f * hum * std::sin (v.ampPhase);
+            if (v.phraseAge < v.rampTime)
+            {
+                const float x = v.phraseAge / v.rampTime;
+                g *= x * x * (3.0f - 2.0f * x);
+            }
+            v.phraseAge += dt;
         }
         else
         {
@@ -1153,7 +1222,7 @@ struct Engine::Impl
             leftOut = rightOut = Tu;
             centre = sp;
             Ts = Tu;
-            g = 0.4f;   // consonnes et souffle : discrets chez les choristes (la voix principale les porte)
+            g = 0.3f;   // consonnes et souffle : discrets chez les choristes (la voix principale les porte)
             if (! v.inGap)
             {
                 // nouvelle phrase : chaque choriste attaque un peu différemment de la fois précédente
@@ -1239,8 +1308,14 @@ struct Engine::Impl
                 const float p0 = v.acc[(size_t) (k & v.accMask)], p1 = v.acc[(size_t) ((k + 1) & v.accMask)];
                 return p0 + q * (p1 - p0);
             };
-            const float yl = v.itdSm < 0 ? readAcc (tl) : y;
-            const float yr = v.itdSm > 0 ? readAcc (tr) : y;
+            float yl = v.itdSm < 0 ? readAcc (tl) : y;
+            float yr = v.itdSm > 0 ? readAcc (tr) : y;
+            for (int k = 0; k < 3; ++k)
+            {
+                const float c = v.apc[k];
+                const float ol = c * yl + v.apxL[k] - c * v.apyL[k]; v.apxL[k] = yl; v.apyL[k] = ol; yl = ol;
+                const float orr = c * yr + v.apxR[k] - c * v.apyR[k]; v.apxR[k] = yr; v.apyR[k] = orr; yr = orr;
+            }
 
             v.gL += (v.gLt - v.gL) * gainSmCoef;
             v.gR += (v.gRt - v.gR) * gainSmCoef;
@@ -1459,4 +1534,5 @@ float Engine::getDetectedMidi() const { return impl->detectedMidi.load (std::mem
 int Engine::getActiveVoices() const { return impl->activeVoices.load (std::memory_order_relaxed); }
 float Engine::getInputLevel() const { return impl->inLevel.load (std::memory_order_relaxed); }
 float Engine::getOutputLevel() const { return impl->outLevel.load (std::memory_order_relaxed); }
+int Engine::getDetectedKey() const { return impl->keyOut.load (std::memory_order_relaxed); }
 } // namespace choir

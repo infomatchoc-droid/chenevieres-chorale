@@ -272,7 +272,7 @@ ChoraleEditor::ChoraleEditor (ChoraleProcessor& p)
     content.addAndMakeVisible (modeButtons);
 
     keyBox.addItemList (names::keys(), 1);
-    keyBox.setTooltip (u ("Tonalité du morceau (mode diatonique)"));
+    keyBox.setTooltip (u ("Tonalité du morceau (mode diatonique). Auto : le plugin la déduit de ce que vous chantez"));
     content.addAndMakeVisible (keyBox);
     keyAtt = std::make_unique<APVTS::ComboBoxAttachment> (apvts, ids::key, keyBox);
     scaleBox.addItemList (names::scales(), 1);
@@ -448,6 +448,22 @@ void ChoraleEditor::paintContent (juce::Graphics& g)
     g.setFont (mono (13.0f));
     g.drawText (noteText, noteArea.withTrimmedTop (14.0f), juce::Justification::centred);
 
+    // tonalité détectée (mode Auto)
+    if (keyText.isNotEmpty())
+    {
+        const auto r = scaleBox.getBounds().toFloat().reduced (0.5f);
+        g.setColour (field);
+        g.fillRoundedRectangle (r, 7.0f);
+        g.setColour (fieldBd);
+        g.drawRoundedRectangle (r, 7.0f, 1.0f);
+        g.setColour (muted);
+        g.setFont (ui (9.0f).withExtraKerningFactor (0.1f));
+        g.drawText (u ("DÉTECTÉE"), r.withHeight (14.0f).translated (0, 2.0f), juce::Justification::centred);
+        g.setColour (accent);
+        g.setFont (ui (13.0f, true));
+        g.drawText (keyText, r.withTrimmedTop (13.0f), juce::Justification::centred);
+    }
+
     // titres des colonnes
     caption (g, u ("TAILLE DU CHŒUR"), sizeArea);
     caption (g, u ("SCÈNE — VUE DE DESSUS"), stageCaption);
@@ -500,6 +516,17 @@ void ChoraleEditor::timerCallback()
     const juce::String info = juce::String (size) + u (" choristes (≈ ") + juce::String (stageView.singersPerSection())
                               + u (" par pupitre) · ") + juce::String (proc.getActiveVoices()) + u (" voix calculées");
     if (info != lastStageInfo) { lastStageInfo = info; content.repaint (stageCaption.toNearestInt().expanded (2)); }
+
+    // tonalité automatique : la gamme détectée remplace le choix du mode
+    const bool autoKey = (int) proc.apvts.getRawParameterValue (ids::key)->load() == choir::kKeyAuto;
+    juce::String kt;
+    if (autoKey)
+    {
+        const int k = proc.getDetectedKey();
+        kt = k < 0 ? u ("à l'écoute…") : names::keys()[k % 12] + (k >= 12 ? u (" mineur") : u (" majeur"));
+    }
+    if (scaleBox.isVisible() == autoKey) scaleBox.setVisible (! autoKey);
+    if (kt != keyText) { keyText = kt; content.repaint (scaleBox.getBounds().expanded (2)); }
 
     if (presetBox.getSelectedId() != proc.currentPreset + 1) presetBox.setSelectedId (proc.currentPreset + 1, juce::dontSendNotification);
 

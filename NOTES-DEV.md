@@ -105,6 +105,7 @@ build/ChoraleSnapshot docs/apercu.png [preset=N] [size=N] [scale=1.5]
 
 | Version | Contenu |
 |---|---|
+| 1.3.0 | Retour « grain métallique, pas assez de monde, justesse, attaques » : signature de phase par choriste (3 passe-tout aléatoires, contre l'effet de peigne entre copies d'une même voix), formants ±9 %, densité minimale de 30 % (copies courtes décorrélées, retards 6–26 ms pour un petit groupe, 16–71 ms pour une foule), **tonalité automatique** (histogramme des notes chantées, mémoire 60 s, profils de Krumhansl, changement seulement si nettement meilleure 5 fois de suite ; « Auto » par défaut, tonalité détectée affichée), entrée en fondu de 20–60 ms par choriste à chaque phrase, consonnes à 0,3. |
 | 1.2.0 | Timbre du chœur réglé sur Wakhama Voice Choir **avec la même voix** (voix sèche de la vidéo passée dans les deux plugins) : coupe-bas 130 Hz (Q 0,6), présence (étagère 700 Hz +8,5 dB), air (étagère 7 kHz = Brillance) ; écart par bande d'octave 60 Hz–16 kHz ramené de 3,2 à ~1,2 dB en moyenne. Le chœur était terne (centroïde 615 Hz contre 966) et trop chargé dans le grave (+25 dB contre +15). Afro / Gospel : brillance 7, désaccord 14, souffle 30. `/tmp/claude-0/ref/bands.py` compare les bandes. |
 | 1.1.1 | Retours de Mathieu (« à 12 s le pitch n'est pas terrible, à partir de 17 s les octaves ne marchent pas ») : (1) la note de référence est le **demi-ton chanté** et non la note de gamme voisine — un ré naturel en mi majeur faisait osciller unisson et octave entre do♯ et ré♯ ; l'intervalle reste tiré de la gamme ; (2) les choristes suivent la justesse **lente** du chanteur (glissés, attaques par en dessous : 90 %, filtre ~80 ms) mais pas ses variations rapides (vibrato : 13 % mesuré) ; (3) retards resserrés : pupitres 6–13 ms (au lieu de 18–34), attaques 25 ms par défaut, 3–7 ms et 8 ms pour Afro / Gospel — sur une mélodie qui saute d'octave, 40–60 ms de retard faisait entendre l'ancienne note ; (4) détecteur : la note est gardée jusqu'au bout de sa queue (seuils 0,45 / -56 dBFS), fins de note transposées jusqu'à 150 ms. Mesure (pupitre seul vs voix, même instant, ±35 cents) : tierce 89,6 %, unisson 86 %, octave 83 %. |
 | 1.1.0 | Stéréo : panoramique d'après la place latérale sur la scène (+ écart interaural ≤ 0,62 ms) au lieu de l'angle vu de loin — le chœur était presque mono (corrélation G/D +0,9). Nouveau réglage **Brillance** (étagère 6,5 kHz, -6…+9 dB, +3 par défaut), disposition par défaut plus large, préréglage **Afro / Gospel studio** calqué sur une vidéo de référence (Wakhama Voice Choir, « Afrobeat Choir ») envoyée par Mathieu : même signature stéréo (chœur seul : corrélation -0,16, référence -0,17). Les préréglages peuvent fixer la place des pupitres. |
@@ -126,6 +127,14 @@ Fichiers de test : `tests/` ne les contient pas (voix de Mathieu, à garder priv
 Vidéo de Wakhama Voice Choir (8 voix, Room 30 %, largeur 70 %, mix 60 %) : `/tmp/claude-0/ref/measure.py` calcule la corrélation
 G/D, le rapport côtés/centre, l'énergie > 4 et > 8 kHz, le centroïde et l'« étalement » des harmoniques (platitude 150–1500 Hz).
 La référence : corrélation -0,17, côtés +1,5 dB au-dessus du centre, harmoniques très étalées, brillance ×7 par rapport à la voix seule.
+
+## Références envoyées par Mathieu (24/10/2026)
+
+- Wakhama Voice Choir (traitement en temps réel, comme Chorale) : rejoint sur la stéréo et le timbre (voir plus haut).
+- « I AM CHOIR » (AMI Audio) et une vidéo « Build a fully arranged choir from a single lead vocal » : **modèles de voix
+  (IA), rendu hors temps réel** (« Create Vocals », barre de progression, export de pistes par pupitre). Ils re-chantent
+  la mélodie avec des voix apprises sur de vrais choristes : c'est pour cela qu'ils sonnent vrais. Un traitement du signal
+  multiplie la voix d'origine et garde son timbre : plafond de réalisme différent.
 
 ## En attente / idées
 

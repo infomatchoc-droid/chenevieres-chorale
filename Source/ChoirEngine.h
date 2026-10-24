@@ -25,7 +25,8 @@ struct IntervalDef { int steps; int semis; };  // degrés (mode diatonique) et d
 constexpr int kNumIntervals = 18;
 extern const IntervalDef kIntervals[kNumIntervals];
 
-constexpr int kNumScales = 5;               // Majeur, mineur naturel, mineur harmonique, dorien, mixolydien
+constexpr int kNumScales = 5;
+constexpr int kKeyAuto = 12;                // tonalité automatique               // Majeur, mineur naturel, mineur harmonique, dorien, mixolydien
 constexpr int kNumHalls = 4;                // Studio, Chapelle, Église, Cathédrale
 
 enum class HarmonyMode { Diatonic = 0, Fixed = 1, Midi = 2 };
@@ -45,8 +46,8 @@ struct Params
 {
     int sizeIndex = 5;                       // 100 choristes
     HarmonyMode mode = HarmonyMode::Diatonic;
-    int keyRoot = 2;                         // ré
-    int scale = 1;                           // mineur naturel
+    int keyRoot = kKeyAuto;                  // 0 … 11 (do … si), ou kKeyAuto : déduite du chant
+    int scale = 0;                           // ignoré en tonalité automatique (majeur ou mineur détecté)
     bool sourceFemale = false;               // timbre de la voix d'origine
     int numSections = 4;                     // 3 ou 4 pupitres (3 : la basse se tait)
     int quality = 1;                         // 0 Éco (8), 1 Normale (16), 2 Haute (32 choristes réels par pupitre)
@@ -104,6 +105,7 @@ public:
     int getActiveVoices() const;              // choristes réellement calculés
     float getInputLevel() const;
     float getOutputLevel() const;
+    int getDetectedKey() const;               // tonalité détectée : tonique + 12 × (mineur), -1 tant qu'on ne sait pas
 
     struct Impl;
 private:

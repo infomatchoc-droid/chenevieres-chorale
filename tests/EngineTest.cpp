@@ -308,6 +308,18 @@ int main (int argc, char** argv)
         CHECK (lat < 0.07 * sr, "latence trop grande");
     }
 
+    //--- 2 bis. tonalité automatique (mélodie ré mi fa sol la fa ré)
+    {
+        Engine e; e.prepare (sr, 256);
+        Params p; p.keyRoot = kKeyAuto; e.setParams (p);
+        std::vector<float> L, R, v2 = voiceMale;
+        v2.insert (v2.end(), voiceMale.begin(), voiceMale.end());
+        run (e, v2, L, R);
+        const int k = e.getDetectedKey();
+        std::printf ("   tonalité automatique : %d (14 = ré mineur, 5 = fa majeur)\n", k);
+        CHECK (k == 14 || k == 5, "tonalité automatique : %d", k);
+    }
+
     //--- 3. intervalles produits (un seul pupitre, choristes identiques)
     std::printf ("3. Intervalles produits\n");
     {
@@ -353,7 +365,7 @@ int main (int argc, char** argv)
             std::printf ("   %-40s attendu %+3d  mesuré %+6.2f\n", what, expectSemis, semis);
             CHECK (std::abs (semis - expectSemis) < 0.3, "%s : %.2f", what, semis);
         };
-        Params p = dryTestParams(); p.mode = HarmonyMode::Diatonic; p.keyRoot = 2; p.scale = 1;
+        Params p = dryTestParams(); p.mode = HarmonyMode::Diatonic; p.keyRoot = 2; p.scale = 1;   // ré mineur
         p.sec[0].on = true; p.sec[0].interval = 0;                     // soprano à l'unisson d'un ré 2 → ramenée dans sa tessiture (+12)
         measureSection (p, false, 12, "soprano, unisson d'une voix grave");
         p = dryTestParams(); p.mode = HarmonyMode::Midi;
