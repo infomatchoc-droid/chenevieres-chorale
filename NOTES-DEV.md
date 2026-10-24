@@ -1,0 +1,97 @@
+# Chènevières Chorale — notes de développement
+
+Récapitulatif pour reprendre le travail à tout moment (Studio des Chènevières, Mathieu Chocat).
+Projet démarré le 24/10/2026 ; même chaîne que Chènevières EQ (JUCE 8.0.9, CMake, GitHub Actions, Inno Setup, pkgbuild).
+
+## Fichiers
+
+| Fichier | Rôle |
+|---|---|
+| `Source/ChoirEngine.*` | Tout le traitement audio, **sans JUCE** (testable seul). |
+| `Source/PluginProcessor.*` | Paramètres (APVTS), MIDI, état, préréglages. |
+| `Source/PluginEditor.*` | Interface (taille de référence 1240 × 800, mise à l'échelle). |
+| `Source/StageView.*` | Scène vue de dessus (déplacement des pupitres). |
+| `Source/Theme.h` | Couleurs, polices (Cinzel du studio), dessin des contrôles. |
+| `Source/ParamIDs.h` | Identifiants et libellés des paramètres. |
+| `Source/Presets.*` | Préréglages d'usine (le n° 0 = état par défaut, vérifié par le test). |
+| `tests/EngineTest.cpp` | Tests du moteur ; écrit aussi des WAV d'écoute ; traite un fichier WAV. |
+| `tests/ProcessorTest.cpp`, `tests/Snapshot.cpp` | Test du processeur ; capture `docs/apercu.png`. |
+
+## Comment ça marche (moteur)
+
+1. **Entrée** : mono (moyenne L/R). Un retard de `latence` échantillons garde la voix principale alignée sur le chœur.
+2. **Détection de hauteur** : YIN sur le signal décimé à ~12 kHz (anticrénelage Butterworth d'ordre 4), pas de 2,7 ms,
+   75–1100 Hz, seuil 0,13, médiane sur 3 estimations, hystérésis de voisement (0,2 / 0,32), porte à -49 dBFS.
+3. **Marques de période** (PSOLA) : une par cycle, sur le sommet le plus haut du signal filtré (passe-bas 1,1 kHz, 2 pôles)
+   près de la position attendue ; hors voisement, marques régulières toutes les 6 ms.
+   Chaque marque porte l'intervalle de chaque pupitre (calculé une fois pour tous les choristes).
+4. **Harmonie** (`sectionOffset`) :
+   - diatonique : note de gamme la plus proche (hystérésis de 0,75 demi-ton), degré + pas de l'intervalle ;
+     l'écart est appliqué à la hauteur réellement chantée (on garde la justesse et le vibrato du chanteur) ;
+   - intervalles fixes : demi-tons de `kIntervals` ;
+   - MIDI : S prend la note la plus haute de l'accord, B la plus basse ; octave la plus proche du centre de la tessiture ;
+     l'accord reste « verrouillé » quand on relâche les touches ;
+   - tessiture automatique : ±12 tant que la note sort de `kRegisters` (pas en MIDI).
+5. **Choristes réels** (`spawnGrain`) : PSOLA, un grain de Hann par période ; demi-largeur = période × (1 à 1,25 vers le grave) ;
+   formants = grain lu plus vite / plus lentement (facteur `fF`) ; gain √(fF / r).
+   Chaque choriste a ses traits tirés une fois (graine fixe : le même chœur à chaque ouverture) :
+   désaccord fixe, dérive lente (nouvelle cible toutes les 0,35–1,45 s), vibrato 4,7–6,2 Hz qui s'installe après 150 ms,
+   glissé 18–88 ms, retard d'attaque, ±3,5 % de formants, ±1,6 dB.
+   Le retard d'un choriste varie au plus de 0,0025 échantillon par échantillon (≈ 4 cents) : pas de saut quand on règle.
+6. **Scène** (`updateGeometry`) : largeur 4–42 m selon la taille, profondeur 0,55 × largeur, auditeur devant à `distance`.
+   Pour chaque choriste : panoramique (sin de l'azimut), gain 1/d, passe-bas de l'air (19 kHz / (1 + d/20)),
+   retard de propagation (d − distance) / 343 m/s.
+   Répartition exacte des choristes entre pupitres (au moins un par pupitre allumé).
+7. **Masse** : au-delà de 8/16/32 choristes calculés par pupitre, 8 copies du pupitre (6–38 ms, modulées 0,15–0,5 ms
+   à 0,05–0,3 Hz), placées au hasard sur la surface du pupitre. Puissance : réels 1/E, masse (E−1)/E, E = représentés / calculés.
+   Un grand chœur sonne un peu plus fort : +16 % × log10(N/3).
+8. **Souffle** : bruit filtré (passe-bande ~4 kHz) qui suit l'enveloppe de la voix retardée.
+9. **Acoustique** (`Hall`) : réseau de 16 retards + Hadamard, amortissement par ligne (temps de réverbération grave/aigu),
+   4 passe-tout de diffusion par canal, 12 premières réflexions, 2 lignes modulées.
+   Lieux : Studio 0,55 s, Chapelle 1,7 s, Église 3,4 s, Cathédrale 6,8 s. Changer de lieu : fondu de sortie → nouvelle salle → fondu d'entrée.
+
+**Latence** = 4 périodes de la note la plus grave (75 Hz) + 2 pas d'analyse ≈ 59 ms à 48 kHz, annoncée au DAW.
+Ne pas la raccourcir sans revoir `processVoice` : un choriste a besoin des marques jusqu'à 1,5 période après sa position,
+et les marques ne sont connues qu'à 2 périodes + 1 pas du présent.
+
+## Mesures (Linux, 1 cœur, 48 kHz, tests du 24/10/2026)
+
+- Détection : erreur moyenne 0,17 demi-ton (voix de synthèse avec vibrato et glissés), aucun saut d'octave.
+- Intervalles produits : à ±0,02 demi-ton (unisson, tierces, quinte, octaves).
+- CPU : ~6 % (3–10 choristes), ~15 % en Éco/Normale (≥ 50), ~43 % en Haute (128 choristes calculés).
+- Niveau stable de 3 à 1000 choristes (-15 à -17 dB RMS pour une voix à -6 dBFS crête).
+
+## Tests (sous Linux)
+
+```
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DJUCE_DIR=/chemin/JUCE -DCHNV_TESTS=ON
+cmake --build build
+build/EngineTest                       # doit finir par « TOUT EST OK »
+build/EngineTest wav dossier           # + fichiers d'écoute (voix de synthèse, 10 / 50 / 100 / 1000 choristes)
+build/EngineTest voix.wav sortie.wav [taille 0-8] [lieu 0-3] [femme 0/1] [tonique 0-11] [mode 0-4]
+Xvfb :98 -screen 0 2560x1600x24 +extension RANDR &   # puis DISPLAY=:98
+build/ProcessorTest                    # dispositions, préréglages, sauvegarde, MIDI
+build/ChoraleSnapshot docs/apercu.png [preset=N] [size=N] [scale=1.5]
+```
+
+## Comment on publie une version
+
+1. La version est dans `CMakeLists.txt` (`project(ChenevieresChorale VERSION x.y.z)`).
+2. Chaque envoi de code lance le build (Mac + Windows) ; les installeurs sont dans les Artifacts du run.
+3. Signature Apple : mêmes secrets que l'EQ, à ajouter dans les secrets **de ce dépôt** (`MACOS_CERT_APP_P12`,
+   `MACOS_CERT_INSTALLER_P12`, `MACOS_CERT_PASSWORD`, `NOTARY_API_KEY`, `NOTARY_KEY_ID`, `NOTARY_ISSUER_ID`).
+   Sans eux : signature ad hoc (`sudo xattr -cr` après installation).
+4. AAX : construit (SDK fourni avec JUCE 8) ; signature PACE à faire comme pour l'EQ.
+
+## Historique des versions
+
+| Version | Contenu |
+|---|---|
+| 1.0.0 | Première version : 9 tailles (3–1000), 4 pupitres SATB, harmonie diatonique / intervalles / MIDI, formants SATB, tessiture automatique, scène vue de dessus, réalisme humain, 4 lieux, 12 préréglages. Interface en français. |
+
+## En attente / idées
+
+- Écoute sur de vraies voix sèches de Mathieu (homme et femme) et réglage fin des valeurs par défaut.
+- Langues de l'interface (l'EQ en a 25 : reprendre `Lang` et `tools/translations*.py`).
+- Mises à jour (`Updates.h` de l'EQ + dépôt public `chenevieres-chorale-updates`), manuel PDF, compte Chènevières.
+- Voyelles / textes chantés différents par pupitre ? Sibilantes adoucies sur les grands chœurs ?

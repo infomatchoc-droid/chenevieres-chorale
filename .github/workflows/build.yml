@@ -1,0 +1,139 @@
+name: Build plugin
+
+# Le build ne se lance que quand le code change (pas pour la documentation)
+on:
+  push:
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
+      - 'tools/**'
+  workflow_dispatch:
+
+# Deux envois rapprochés : seul le dernier est construit
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            name: macOS
+          - os: windows-latest
+            name: Windows
+    runs-on: ${{ matrix.os }}
+    name: ${{ matrix.name }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      # La version est lue dans CMakeLists.txt
+      - name: Read version
+        shell: bash
+        run: echo "VERSION=$(sed -n 's/^project(ChenevieresChorale VERSION \([0-9.]*\)).*/\1/p' CMakeLists.txt)" >> "$GITHUB_ENV"
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release --parallel 4
+
+      - name: Engine test
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      # ---------- macOS : signature Apple (Developer ID) + notarisation ----------
+      # Mêmes secrets que Chènevières EQ (Settings → Secrets → Actions de CE dépôt) ; sans eux : signature ad hoc.
+      - name: Import Apple certificates (macOS)
+        if: runner.os == 'macOS'
+        env:
+          APP_P12: ${{ secrets.MACOS_CERT_APP_P12 }}
+          INSTALLER_P12: ${{ secrets.MACOS_CERT_INSTALLER_P12 }}
+          P12_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          if [ -z "$APP_P12" ] || [ -z "$INSTALLER_P12" ]; then
+            echo "Pas de certificats Apple : signature ad hoc"
+            exit 0
+          fi
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          KC_PASS="$(openssl rand -hex 16)"
+          security create-keychain -p "$KC_PASS" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KC_PASS" "$KEYCHAIN"
+          echo "$APP_P12" | base64 --decode > "$RUNNER_TEMP/app.p12"
+          echo "$INSTALLER_P12" | base64 --decode > "$RUNNER_TEMP/installer.p12"
+          security import "$RUNNER_TEMP/app.p12" -k "$KEYCHAIN" -P "$P12_PASSWORD" -T /usr/bin/codesign -T /usr/bin/productsign -T /usr/bin/productbuild
+          security import "$RUNNER_TEMP/installer.p12" -k "$KEYCHAIN" -P "$P12_PASSWORD" -T /usr/bin/codesign -T /usr/bin/productsign -T /usr/bin/productbuild
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KC_PASS" "$KEYCHAIN" > /dev/null
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          APP_ID=$(security find-identity -v -p codesigning "$KEYCHAIN" | grep "Developer ID Application" | head -1 | sed 's/.*"\(.*\)"/\1/')
+          INST_ID=$(security find-identity -v "$KEYCHAIN" | grep "Developer ID Installer" | head -1 | sed 's/.*"\(.*\)"/\1/')
+          echo "SIGN_APP=$APP_ID" >> "$GITHUB_ENV"
+          echo "SIGN_INSTALLER=$INST_ID" >> "$GITHUB_ENV"
+
+      - name: Sign plugins (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          for p in "build/ChenevieresChorale_artefacts/Release/VST3/Chenevieres Chorale.vst3" \
+                   "build/ChenevieresChorale_artefacts/Release/AU/Chenevieres Chorale.component"; do
+            if [ -n "$SIGN_APP" ]; then
+              codesign --force --deep --options runtime --timestamp -s "$SIGN_APP" "$p"
+            else
+              codesign --force --deep -s - "$p"
+            fi
+            codesign --verify --deep --strict "$p"
+          done
+
+      - name: Build .pkg (macOS)
+        if: runner.os == 'macOS'
+        run: bash installer/macos/build_pkg.sh "$VERSION"
+
+      - name: Notarize .pkg (macOS)
+        if: runner.os == 'macOS'
+        env:
+          NOTARY_KEY: ${{ secrets.NOTARY_API_KEY }}
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER: ${{ secrets.NOTARY_ISSUER_ID }}
+        run: |
+          if [ -z "$SIGN_INSTALLER" ] || [ -z "$NOTARY_KEY" ]; then
+            echo "Pas de notarisation (certificats ou clé absents)"
+            exit 0
+          fi
+          echo "$NOTARY_KEY" | base64 --decode > "$RUNNER_TEMP/notary.p8"
+          PKG=$(ls dist/*.pkg)
+          xcrun notarytool submit "$PKG" --key "$RUNNER_TEMP/notary.p8" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER" --wait --timeout 30m | tee "$RUNNER_TEMP/notary.log"
+          if ! grep -q "status: Accepted" "$RUNNER_TEMP/notary.log"; then
+            ID=$(grep -m1 "  id:" "$RUNNER_TEMP/notary.log" | awk '{print $2}')
+            xcrun notarytool log "$ID" --key "$RUNNER_TEMP/notary.p8" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER" || true
+            exit 1
+          fi
+          xcrun stapler staple "$PKG"
+          spctl --assess --type install -v "$PKG"
+
+      # ---------- Windows : installateur .exe (Inno Setup) ----------
+      - name: Build .exe (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress }
+          & $iscc "/DAppVersion=$env:VERSION" installer\windows\ChenevieresChorale.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v6
+        with:
+          name: Chenevieres-Chorale-${{ matrix.name }}-installer
+          path: dist/*
+
+      - name: Upload raw plugins
+        uses: actions/upload-artifact@v6
+        with:
+          name: Chenevieres-Chorale-${{ matrix.name }}-plugins
+          path: |
+            build/ChenevieresChorale_artefacts/Release/VST3/
+            build/ChenevieresChorale_artefacts/Release/AU/
+            build/ChenevieresChorale_artefacts/Release/AAX/
+          if-no-files-found: ignore
